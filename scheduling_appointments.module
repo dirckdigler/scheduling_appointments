@@ -1,0 +1,2919 @@
+<?php
+/**
+ * @file
+ * Allows you to schedule appointments
+ */
+
+require_once drupal_get_path('module', 'akt_ws') . '/includes/nusoap/nusoap.php';
+global $sekey;
+$sekey = variable_get('ptc_key', '');
+
+class scheduling_appointmentsMailSystem extends DefaultMailSystem {
+
+  public function format(array $message) {
+    $message['body'] = implode("\n\n", $message['body']);
+    $message['body'] = drupal_wrap_mail($message['body']);
+
+    return $message;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function scheduling_appointments_menu() {
+  $items['pide_tu_cita'] = array(
+    'title'           => 'PIDE TU CITA',
+    'page callback'   => 'drupal_get_form',
+    'page arguments'  => array('scheduling_appointments_form'),
+    'access callback' => TRUE,
+    'type'            => MENU_NORMAL_ITEM,
+  );
+  $items['pide_tu_cita/cambiar-estado-cita'] = array(
+    'page callback'   => 'scheduling_appointments_change_state',
+    'access callback' => TRUE,
+    'type'            => MENU_NORMAL_ITEM,
+  );
+  $items['pide_tu_cita/horario'] = array(
+    'page callback'   => 'scheduling_appointments_schedule',
+    'access callback' => TRUE,
+    'type'            => MENU_NORMAL_ITEM,
+  );
+  $items['consulta_tu_cita'] = array(
+    'title'           => 'CONSULTA TU CITA',
+    'page callback'   => 'drupal_get_form',
+    'page arguments'  => array('scheduling_appointments_cancel_form'),
+    'access callback' => TRUE,
+    'type'            => MENU_NORMAL_ITEM,
+  );
+  $items['services/%'] = array(
+    'title'           => 'Service',
+    'page callback'   => '_scheduling_appointments_services',
+    'page arguments'  => array(1),
+    'access callback' => TRUE,
+    'type'            => MENU_NORMAL_ITEM,
+  );
+  $items['admin/config/system/pide-tu-cita'] = array(
+    'title'            => 'Configuracion pide tu cita',
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('scheduling_appointments_confg_form'),
+    'access arguments' => array('administer site configuration'),
+    'type'             => MENU_NORMAL_ITEM,
+  );
+
+  return $items;
+}
+
+/**
+ * Config key form.
+ */
+function scheduling_appointments_confg_form($form, &$form_state) {
+  $form['ptc_key'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Web service secutiry key'),
+    '#default_value' => variable_get('ptc_key', ''),
+    '#size'          => 60,
+    '#maxlength'     => 20,
+    '#required'      => TRUE,
+  );
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Save'));
+
+  return $form;
+}
+
+/**
+ * Config key form submit.
+ */
+function scheduling_appointments_confg_form_submit($form, &$form_state) {
+  variable_set('ptc_key', $form_state['values']['ptc_key']);
+  global $sekey;
+  $sekey = $form_state['values']['ptc_key'];
+  drupal_set_message(t('Changes saved'));
+}
+
+/**
+ * Services callback.
+ */
+function _scheduling_appointments_services($type) {
+  global $sekey;
+  if (isset($_POST['seke']) && $_POST['seke'] == $sekey) {
+    switch ($type) {
+      // States.
+      case 'dtp':
+        $states = _get_states();
+        drupal_json_output($states);
+        break;
+
+      // Cities.
+      case 'cts':
+        $cities = _get_cities_dropdown_options('All');
+        drupal_json_output($cities);
+        break;
+
+      // Service centers.
+      case 'ctsr':
+        $centers = _get_centerservice_dropdown_options('All');
+        drupal_json_output($centers);
+        break;
+
+      // Service centers.
+      case 'ctsrd':
+        $addresses = _get_centerservice_dropdown_options_address('All');
+        drupal_json_output($addresses);
+        break;
+
+      // Type dates.
+      case 'ctty':
+        $types = _get_typedates_dropdown_options('All');
+        drupal_json_output($types);
+        break;
+
+      // Update calendar.
+      case 'upcal':
+        if (isset($_POST['center']) && $_POST['form']) {
+          $pam1 = $_POST['center'];
+          $pam2 = drupal_json_decode($_POST['form']);
+          $types = _scheduling_appointments_update_calendar($pam1, $pam2);
+          drupal_json_output($types);
+        }
+        else {
+          drupal_not_found();
+        }
+        break;
+
+      // Schedule.
+      case 'sche':
+        if (isset($_POST['center']) && isset($_POST['dte'])) {
+          $items = scheduling_appointments_schedule(FALSE, $_POST['center'], $_POST['dte']);
+          drupal_json_output($items);
+        }
+        else {
+          drupal_not_found();
+        }
+        break;
+
+      // Know if chasis has a previous date.
+      case 'chhd':
+        if (isset($_POST['chas'])) {
+          $query_chasis = db_select('scheduling_appointments', 's')
+            ->fields('s', array('id_appointment', 'reservation_code', 'chasis'));
+          $query_chasis->condition('s.chasis', $_POST['chas'], '=');
+          $query_chasis->condition('s.state', 'Agendada', '=');
+          $result_chasis = $query_chasis->execute();
+          $validation = FALSE;
+          while ($aux = $result_chasis->fetchAssoc()) {
+            if (isset($aux['chasis'])) {
+              $validation = TRUE;
+            }
+          }
+          drupal_json_output($validation);
+        }
+        break;
+
+      // Taxonomy.
+      case 'txvc':
+        // watchdog('scheduling_appointments', serialize($_POST));
+        if (isset($_POST['tvoc'])) {
+          $items = array();
+          $vid = $_POST['tvoc'];
+          $tree = taxonomy_get_tree($vid);
+          foreach ($tree as $term) {
+            $items[$term->name] = array(
+              'tid'  => $term->tid,
+              'name' => $term->name,
+            );
+            if (isset($term->parents[0]) && $term->parents[0] != '0') {
+              $items[$term->name]['parent'] = $term->parents[0];
+            }
+          }
+          drupal_json_output($items);
+        }
+        break;
+
+      // Service centers id..
+      case 'allcents':
+        $items = array();
+        $query = db_select('node', 'n')
+          ->fields('n', array('nid', 'title'))
+          ->condition('n.type', 'service_centers');
+        $results = $query->execute();
+        while ($result = $results->fetchAssoc()) {
+          $items[$result['title']] = array(
+            'nid'   => $result['nid'],
+            'title' => $result['title'],
+          );
+        }
+        drupal_json_output($items);
+        break;
+
+      // Motorcycle owner data.
+      case 'motown':
+        $result = array();
+        if (isset($_POST['mo_fied']) && isset($_POST['mo_valu'])) {
+          $query = db_select('motorcycle_owner', 'mo')
+            ->fields('mo', array('identification_owner'));
+          $query->condition('mo.' . $_POST['mo_fied'], $_POST['mo_valu']);
+          $result = $query->execute()->fetchAssoc();
+        }
+        drupal_json_output($result);
+        break;
+
+      // Motorcycle owner data insert or update.
+      case 'motownupdata':
+        if (isset($_POST['mtotydata']) && $_POST['mtotydata'] == 'ins' && isset($_POST['mtodata'])) {
+          // watchdog('scheduling_appointments_1', $_POST['mtodata']);
+          $data = drupal_json_decode($_POST['mtodata']);
+          $save_owner = db_insert('motorcycle_owner')
+            ->fields(array(
+              'identification_owner' => $data['document'], 'name_owner' => $data['name_owner'], 'last_name_owner' => $data['last_name_owner'], 'address_owner' => $data['address_owner'], 'date_born_owner' => $data['date_born_owner'], 'phone_owner' => $data['phone_owner'], 'mobile_phone' => $data['mobile_phone'], 'email_owner' => $data['email_owner'], 'site' => 'tvs',
+            ))->execute();
+          drupal_json_output(TRUE);
+        }
+        elseif (isset($_POST['mtotydata']) && $_POST['mtotydata'] == 'upd' && isset($_POST['mtodata'])) {
+          $data = drupal_json_decode($_POST['mtodata']);
+          db_update('motorcycle_owner')
+            ->fields(array(
+              'name_owner' => $data['name_owner'], 'last_name_owner' => $data['last_name_owner'], 'address_owner' => $data['address_owner'], 'date_born_owner' => $data['date_born_owner'], 'phone_owner' => $data['phone_owner'], 'mobile_phone' => $data['mobile_phone'], 'email_owner' => $data['email_owner'], 'site' => 'tvs',
+            ))
+            ->condition('identification_owner', $data['document'], '=')
+            ->execute();
+          drupal_json_output(TRUE);
+        }
+        else {
+          drupal_not_found();
+        }
+        break;
+
+      // Scheduling data.
+      case 'schecode':
+        $result = array();
+        if (isset($_POST['s_code'])) {
+          $query = db_select('scheduling_appointments', 's')
+            ->fields('s', array('id_appointment'));
+          $query->condition('s.reservation_code', $_POST['s_code'], '=');
+          $result = $query->execute()->fetchAssoc();
+        }
+        drupal_json_output($result);
+        break;
+
+      // Scheduling insert data.
+      case 'scheinst':
+        if (isset($_POST['mtodata'])) {
+          // watchdog('scheduling_appointments_3', $_POST['mtodata']);
+          $data = drupal_json_decode($_POST['mtodata']);
+          try {
+            $save_appointments = db_insert('scheduling_appointments')
+              ->fields(array(
+                'reservation_code' => $data['code'], 'uid' => $data['id_user'], 'tid_department' => $data['tid_department'], 'tid_city' => $data['tid_city'], 'tid_type_services' => $data['tid_type_services'], 'id_center_services' => $data['id_center'], 'mileage' => $data['kilometraje'], 'comments' => $data['comments'], 'date' => $data['date'], 'chasis' => $data['chasis'], 'plate' => $data['plate'], 'identification_owner' => $data['document'], 'state' => 'Agendada', 'calendar_type' => $data['calendar_type'], 'site' => 'tvs', 'created' => REQUEST_TIME,
+              ))->execute();
+            drupal_json_output(TRUE);
+          } catch (Exception $e) {
+            watchdog('scheduling_appointments', $e->getMessage());
+          }
+        }
+        else {
+          drupal_not_found();
+        }
+        break;
+
+      // Consult your appointment.
+      case 'consultappointment':
+        $result = array();
+        if (isset($_POST['chasis'])) {
+          $query = db_select('scheduling_appointments', 's')
+            ->fields('s', array('reservation_code', 'plate', 'chasis', 'identification_owner', 'id_center_services', 'mileage', 'tid_type_services', 'tid_city', 'tid_department', 'date'));
+          $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+          $or = db_or();
+          $or->condition('chasis', $_POST['chasis']);
+          $or->condition('reservation_code', $_POST['chasis']);
+          $query->condition($or);
+          $query->condition('state', 'Agendada', '=');
+          $query->addField('ac', 'field_address_center_value', 'address_center');
+          $dates = $query->execute();
+          $result = $dates->fetchAssoc();
+          if ($result) {
+            if (isset($result['tid_type_services'])) {
+              $term_services = taxonomy_term_load($result['tid_type_services']);
+              $result['service'] = $term_services->name;
+            }
+            if (isset($result['tid_city']) && $result['tid_city']) {
+              $term_city = taxonomy_term_load($result['tid_city']);
+              $result['city'] = $term_city->name;
+            }
+            if (isset($result['tid_department']) && $result['tid_department']) {
+              $term_dtp = taxonomy_term_load($result['tid_department']);
+              $result['department'] = $term_dtp->name;
+            }
+            if (isset($result['id_center_services']) && $result['id_center_services']) {
+              $center_services = node_load($result['id_center_services']);
+              $result['center_services'] = $center_services->title;
+            }
+          }
+          drupal_json_output($result);
+        }
+        else {
+          drupal_not_found();
+        }
+        break;
+
+      // Motorcycle owner full data.
+      case 'motfullown':
+        $result = array();
+        if (isset($_POST['id_own'])) {
+          $query = db_select('motorcycle_owner', 'm')
+            ->fields('m', array('identification_owner', 'name_owner', 'phone_owner', 'last_name_owner', 'address_owner', 'date_born_owner', 'mobile_phone', 'email_owner'));
+          $query->condition('identification_owner', $_POST['id_own'], '=');
+          $dates = $query->execute();
+          $result = $dates->fetchAssoc();
+          drupal_json_output($result);
+        }
+        else {
+          drupal_not_found();
+        }
+        break;
+
+      // Cancel appointment.
+      case 'valcappointment':
+        $result_data = 'pass';
+        if (isset($_POST['res_cod'])) {
+          $query = db_select('scheduling_appointments', 's')
+            ->fields('s', array('chasis'));
+          $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+          $or = db_or();
+          $or->condition('chasis', $_POST['res_cod']);
+          $or->condition('reservation_code', $_POST['res_cod']);
+          $query->condition($or);
+          $query->condition('state', 'Agendada', '=');
+          $dates = $query->execute();
+          $result = $dates->fetchAssoc();
+          if (isset($result['chassis'])) {
+            $result_data = 'error';
+          }
+        }
+        drupal_json_output($result_data);
+        break;
+
+      // Cancel appointment.
+      case 'cancappointment':
+        $result = array();
+        if (isset($_POST['res_cod'])) {
+          $query = db_select('scheduling_appointments', 's')
+            ->fields('s', array('reservation_code', 'plate', 'chasis', 'identification_owner', 'id_center_services', 'mileage', 'tid_type_services', 'tid_city', 'tid_department', 'date'));
+          $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+          $query->condition('reservation_code', $_POST['res_cod']);
+          $query->condition('state', 'Agendada', '=');
+          $query->addField('ac', 'field_address_center_value', 'address_center');
+          $dates = $query->execute();
+          $result = $dates->fetchAssoc();
+
+          db_update('scheduling_appointments')
+            ->fields(array('state' => 'Cancelada',))
+            ->condition('reservation_code', $_POST['res_cod'], '=')
+            ->execute();
+          if (isset($result['id_center_services'])) {
+            $query_email_center = db_select('node', 'n')
+              ->fields('n', array('nid', 'title'));
+            $query_email_center->innerJoin('field_data_field_email_admin', 'fde', 'fde.entity_id = n.nid');
+            $query_email_center->condition('n.nid', $result['id_center_services'], '=');
+            $query_email_center->condition('n.type', 'service_centers', '=');
+            $query_email_center->addField('fde', 'field_email_admin_email', 'email');
+            $result_email = $query_email_center->execute();
+            $email_center = $result_email->fetchAssoc();
+            if ($email_center) {
+              $result['center_info'] = $email_center;
+            }
+          }
+
+          if (isset($result['identification_owner'])) {
+            $query = db_select('motorcycle_owner', 'm')
+              ->fields('m', array('name_owner', 'phone_owner', 'last_name_owner', 'address_owner', 'date_born_owner', 'mobile_phone', 'email_owner'));
+            $query->condition('identification_owner', $result['identification_owner'], '=');
+            $dates = $query->execute();
+            $result_owner = $dates->fetchAssoc();
+            if ($result_owner) {
+              $result['motorcycle_owner'] = $result_owner;
+            }
+          }
+
+          if (isset($result['tid_type_services'])) {
+            $term_services = taxonomy_term_load($result['tid_type_services']);
+            $result['service'] = $term_services->name;
+          }
+          if (isset($result['tid_city']) && $result['tid_city']) {
+            $term_city = taxonomy_term_load($result['tid_city']);
+            $result['city'] = $term_city->name;
+          }
+          if (isset($result['tid_department']) && $result['tid_department']) {
+            $term_dtp = taxonomy_term_load($result['tid_department']);
+            $result['department'] = $term_dtp->name;
+          }
+          drupal_json_output($result);
+        }
+        else {
+          drupal_not_found();
+        }
+        break;
+
+      // Data center contact info.
+      case 'centerdinf':
+        $items = array();
+        $query = db_select('node', 'n');
+        $query->innerJoin('field_data_field_email_admin', 'fde', 'fde.entity_id = n.nid');
+        $query->innerJoin('field_data_field_address_center', 'fdc', 'fdc.entity_id = n.nid');
+        $query_email_center = $query->fields('n', array('nid', 'title'));
+        $query_email_center->fields('fde', array('field_email_admin_email'));
+        $query_email_center->fields('fdc', array('field_address_center_value'));
+        $query_email_center->condition('n.type', 'service_centers', '=');
+        $result_emails = $query_email_center->execute()->fetchAll();
+        if ($result_emails) {
+          foreach ($result_emails as $result_email) {
+            $items[$result_email->nid] = $result_email;
+          }
+        }
+        drupal_json_output($items);
+        break;
+
+      default:
+        return drupal_not_found();
+        break;
+    }
+  }
+}
+
+/**
+ * Scheduling appointments Form.
+ */
+function scheduling_appointments_form($form, &$form_state) {
+  $form['#attached']['js'] = array(
+    drupal_get_path('module', 'scheduling_appointments') . '/js/scheduling_appointments.js',
+  );
+  $form['#prefix'] = '<div' . drupal_attributes(array('id' => 'akt-scheduling-appointments-form')) . '>';
+  $form['#suffix'] = '</div>';
+  $step = isset($form_state['storage']['step']) ? $form_state['storage']['step'] : 1;
+  $form['step'] = array(
+    '#type'  => 'hidden',
+    '#value' => $step,
+  );
+
+  switch ($step) {
+    case 1:
+      $states = _get_states();
+
+      if (isset($form_state['values']['department'])) {
+        $form_state['info'][$step]['department'] = $form_state['values']['department'];
+      }
+      if (isset($form_state['values']['city'])) {
+        $form_state['info'][$step]['city'] = $form_state['values']['city'];
+      }
+      if (isset($form_state['values']['center_service'])) {
+        $form_state['info'][$step]['center_service'] = $form_state['values']['center_service'];
+      }
+
+      $selected_state = isset($form_state['info'][$step]['department']) ? $form_state['info'][$step]['department'] : key($states);
+      $selected_city = isset($form_state['info'][$step]['city']) ? $form_state['info'][$step]['city'] : 'Ciudad';
+      $selected_center = isset($form_state['info'][$step]['center_service']) ? $form_state['info'][$step]['center_service'] : 'Centro de servicio';
+      $form_state['storage']['step'] = $step;
+      $form['date_information'] = array(
+        '#title'       => t('1. APPOINTMENT DATA'),
+        '#type'        => 'fieldset',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+      );
+      $form['date_information']['department'] = array(
+        '#title'         => 'Departamento',
+        '#type'          => 'select',
+        '#description'   => 'Selecciona un departamento',
+        '#options'       => $states,
+        '#empty_option'  => 'Departamento',
+        '#default_value' => !empty($form_state['info'][$step]['department']) ? $form_state['info'][$step]['department'] : '',
+         '#required'     => TRUE,
+        '#ajax'          => array(
+          'callback'     => '_cities_command_callback',
+        ),
+      );
+      $form['date_information']['city'] = array(
+        '#title'         => t('Ciudad'),
+        '#type'          => 'select',
+        '#description'   => t('Selecciona una ciudad'),
+        '#options'       => _get_cities_dropdown_options($selected_state),
+        '#empty_option'  => 'Ciudad',
+        '#default_value' => !empty($form_state['info'][$step]['city']) ? $form_state['info'][$step]['city'] : '',
+        '#prefix'        => '<div id="city_div">',
+        '#suffix'        => '</div>',
+        '#required'      => TRUE,
+        '#ajax'          => array(
+          'callback'     => '_type_command_callback',
+        ),
+      );
+      $form['date_information']['center_service'] = array(
+        '#title'         => t('Centro de Servicio'),
+        '#type'          => 'select',
+        '#description'   => t('Selecciona el centro de servicio'),
+        '#options'       => _get_centerservice_dropdown_options($selected_city),
+        '#empty_option'  => 'Centro de Servicio',
+        '#default_value' => !empty($form_state['info'][$step]['center_service']) ? $form_state['info'][$step]['center_service'] : '',
+        '#prefix'        => '<div id="center_service_div">',
+        '#suffix'        => '<span id="address_center"></span></div>',
+        '#required'      => TRUE,
+        '#ajax'          => array(
+          'callback'     => '_center_command_callback',
+        ),
+      );
+      $form['date_information']['type_date'] = array(
+        '#title'         => t('Tipo de Cita'),
+        '#type'          => 'select',
+        '#description'   => t('Selecciona un tipo de cita'),
+        '#options'       => _get_typedates_dropdown_options($selected_center, $selected_city),
+        '#empty_option'  => 'Tipo de servicio',
+        '#default_value' => !empty($form_state['info'][$step]['type_date']) ? $form_state['info'][$step]['type_date'] : '',
+        '#prefix'        => '<div id="typedate_div">',
+        '#suffix'        => '</div>',
+        '#required'      => TRUE,
+      );
+      $form['date_information']['kilometraje'] = array(
+        '#title'         => 'Kilometraje Actual',
+        '#type'          => 'textfield',
+        '#prefix'        => '<div id="wrapper-km">',
+        '#description'   => t('Escribe el kilometraje actual'),
+        '#default_value' => !empty($form_state['info'][$step]['kilometraje']) ? $form_state['info'][$step]['kilometraje'] : '',
+        '#suffix'        => '</div>',
+      );
+      $form['coments_field'] = array(
+        '#title'       => t('2. COMENTARIOS'),
+        '#type'        => 'fieldset',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+      );
+      $form['coments_field']['coments'] = array(
+        '#title'         => t('Cometarios'),
+        '#type'          => 'textarea',
+        '#description'   => 'Escribe tus Comentarios, No mayor a 250 caracteres',
+        '#default_value' => !empty($form_state['info'][$step]['coments']) ? $form_state['info'][$step]['coments'] : '',
+        '#required'      => TRUE,
+        '#resizable'     => FALSE,
+        '#rows'          => 2,
+      );
+      $form['submit'] = array(
+        '#type'       => 'submit',
+        '#value'      => t('See Calendar'),
+        '#id'         => 'next',
+        '#attributes' => array('class' => array(drupal_html_class('see-calendar'))),
+        '#ajax'       => array(
+          'wrapper'   => 'akt-scheduling-appointments-form',
+          'callback'  => 'scheduling_appointments_form_callback',
+          'effect'    => 'fade',
+          'method'    => 'replace',
+        ),
+      );
+
+      break;
+
+    case 2:
+      $unable_days = _scheduling_appointments_update_calendar($form_state['values']['center_service'], $form_state);
+
+      $form['date_hour_schedule'] = array(
+        '#title'       => t('3. SELECCIONA FECHA Y HORA'),
+        '#type'        => 'fieldset',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+      );
+      $form['date_hour']['info_calendar'] = array(
+        '#prefix' => '<div id="c1" class="dta-f2">',
+        '#markup' => !empty($form_state['values']['center_service']) ? "<p class='label'>CENTRO DE SERVICIO:</p><p class='datos'>" . $form_state['values']['center_service'] . "</p>" : '',
+        '#suffix' => '</div>',
+      );
+      $form['date_hour']['info_calendar_services'] = array(
+        '#prefix' => '<div id="c2" class="dta-f2">',
+        '#markup' => !empty($form_state['values']['type_date']) ? "<p class='label'>SERVICIO: </p><p class='datos'>" . $form_state['values']['type_date'] . "</p>" : '',
+        '#suffix' => '</div>',
+      );
+      $form['date_hour']['legend_container'] = array(
+        '#type'       => 'container',
+        '#attributes' => array('id' => array('legend_container')),
+      );
+      $form['date_hour']['legend_container']['blue'] = array(
+        '#type'       => 'container',
+        '#attributes' => array('class' => array(drupal_html_class('blue'))),
+      );
+      $form['date_hour']['legend_container']['blue']['label'] = array(
+        '#prefix' => '<p class = "text_legend">',
+        '#markup' => 'Disponible',
+        '#suffix' => '</p>',
+      );
+
+      $form['date_hour']['legend_container']['red'] = array(
+        '#type'       => 'container',
+        '#attributes' => array('class' => array(drupal_html_class('red'))),
+      );
+      $form['date_hour']['legend_container']['red']['label1'] = array(
+        '#prefix' => '<p class = "text_legend">',
+        '#markup' => 'No Disponible',
+        '#suffix' => '</p>',
+      );
+      $form['date_hour']['date'] = array(
+        '#title'         => t('Fecha de la Cita'),
+        '#type'          => 'textfield',
+        '#description'   => t('Selecciona la fecha de la cita'),
+        '#required'      => TRUE,
+        '#attributes'    => array('class' => array(drupal_html_class('edit-date'))),
+        '#default_value' => !empty($form_state['info'][2]['date']) ? $form_state['info'][2]['date'] : '',
+      );
+      $form['date_hour']['widget_date_container'] = array(
+        '#prefix' => '<div class="container">',
+        '#suffix' => '</div>',
+      );
+      $form['date_hour']['widget_date_container']['widget_date_hour'] = array(
+        '#prefix' => '<div class="calendar">',
+        '#suffix' => '</div>',
+      );
+      $form['date_hour']['widget_date_container']['widget_date_hour']['widget_date'] = array(
+        '#prefix' => '<div id="calendario">',
+        '#markup' => "<h1>Calendario</h1>",
+        '#suffix' => '</div>',
+      );
+      $form['date_hour']['widget_date_container']['widget_date_hour']['widget_hour'] = array(
+        '#prefix' => '<div class = "hourscontainer">',
+        '#suffix' => '</div>',
+      );
+
+      $form['date_hour']['widget_date_container']['widget_date_hour']['widget_hour']['title_date'] = array(
+        '#prefix' => '<h2 id="title_date">',
+        '#suffix' => '</h2>',
+        '#markup' => "",
+        '#weight' => "",
+      );
+      $form['date_hour']['widget_date_container']['widget_date_hour']['widget_hour']['container'] = array(
+        '#prefix' => '<ul class="hours">',
+        '#suffix' => '</ul>',
+      );
+      $form['date_hour']['slide'] = array(
+        '#prefix' => '<div id="slider">',
+        '#suffix' => '</div>',
+      );
+      $form['date_hour']['clearfix'] = array(
+        '#prefix' => '<div class="clearfix">',
+        '#suffix' => '</div>',
+      );
+
+      $form['date_hour']['hour'] = array(
+        '#title'         => t('Hora de la Cita'),
+        '#type'          => 'textfield',
+        '#description'   => t('Selecciona la hora de la cita'),
+        '#required'      => TRUE,
+        '#attributes'    => array('class' => array(drupal_html_class('edit-hour'))),
+        '#default_value' => !empty($form_state['info'][2]['hour']) ? $form_state['info'][2]['hour'] : '',
+      );
+      $form['date_hour']['widget_hour'] = array(
+        '#type'       => 'html_tag',
+        '#tag'        => 'div',
+        '#attributes' => array('class' => array(drupal_html_class('outer'))),
+      );
+      $form['back'] = array(
+        '#type'                    => 'submit',
+        '#value'                   => t('Back'),
+        '#id'                      => 'back',
+        '#limit_validation_errors' => array(),
+        '#submit'                  => array('ajax_form_multistep_back_submit'),
+        '#ajax'                    => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+      );
+      $form['submit'] = array(
+        '#type'  => 'submit',
+        '#value' => t('Next'),
+        '#id'    => 'next',
+        '#ajax'  => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+      );
+      $day = date('d-m-Y');
+      $i = strtotime('25-05-2014');
+      $day_i = date('d-m-Y', $i);
+      $dates[] = $day_i;
+
+      break;
+
+    case 3:
+
+      $form['update'] = array(
+        '#title'       => t('4. ACTUALIZA TUS DATOS'),
+        '#type'        => 'fieldset',
+        '#prefix'      => '<div id="number-chassis">',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+        '#suffix'      => '</div>',
+      );
+      $form['update']['instruction'] = array(
+        '#prefix' => '<div id="instructions-get-info-by-chassis">',
+        '#markup' => 'Ingresa el # de chasis de tu moto y haz click en enviar',
+        '#suffix' => '</div>',
+      );
+      $form['update']['chassis'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Chasis'),
+        '#description'   => 'Ingresa tu número de chasis',
+        '#attributes'    => array('class' => array('text_chassis')),
+        '#default_value' => !empty($form_state['info'][3]['chassis']) ? $form_state['info'][3]['chassis'] : '',
+      );
+      $form['back'] = array(
+        '#type'                    => 'submit',
+        '#value'                   => t('Back'),
+        '#id'                      => 'back',
+        '#limit_validation_errors' => array(),
+        '#submit'                  => array('ajax_form_multistep_back_step_1_submit'),
+        '#ajax'                    => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+      );
+      $form['submit'] = array(
+        '#type'  => 'submit',
+        '#value' => t('Next'),
+        '#id'    => 'next',
+        '#ajax'  => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+      );
+      $form['update']['link_chassis'] = array(
+        '#prefix' => '<a href="#" class="link_chassis" >',
+        '#markup' => '¿Donde encuentro el número de chasis?',
+        '#suffix' => '</a>',
+      );
+      $form['update']['image'] = array(
+        '#prefix' => '<div id="popup-content-chassis"><div class="akt-hover"></div><img src="sites/all/themes/akt/images/chasis.jpg"/></div>',
+      );
+
+      break;
+    case 4:
+
+      $result = $form_state['storage']['result']['GetDataSaleByMotorcycleResult'];
+      $states = akt_ws_GetDataDepto();
+
+      if (isset($form_state['info'][$step]['back_step']) && $form_state['info'][$step]['back_step'] == TRUE) {
+
+        $Plate = isset($form_state['info'][$step]['placa']) ? $form_state['info'][$step]['placa'] : $result['Plate'];
+
+        $Name = isset($form_state['info'][$step]['names']) ? $form_state['info'][$step]['names'] : $result['Name'];
+
+        $Identification = isset($form_state['info'][$step]['document']) ? $form_state['info'][$step]['document'] : $result['Identification'];
+
+        $Address = isset($form_state['info'][$step]['document']) ? $form_state['info'][$step]['document'] : $result['Address'];
+
+        $TelephoneNumber = isset($form_state['info'][$step]['phone']) ? $form_state['info'][$step]['phone'] : $result['TelephoneNumber'];
+
+        $TelephoneNumber2 = isset($form_state['info'][$step]['cell_phone']) ? $form_state['info'][$step]['cell_phone'] : $result['TelephoneNumber2'];
+
+        $EMail = isset($form_state['info'][$step]['email']) ? $form_state['info'][$step]['email'] : $result['EMail'];
+
+        $IdDeptoUse = isset($form_state['info'][$step]['state']) ? $form_state['info'][$step]['state'] : $result['IdDeptoUse'];
+
+        $Chassis = isset($form_state['info'][$step]['chassis2']) ? $form_state['info'][$step]['chassis2'] : $result['Chassis'];
+
+        $DateBorn = isset($form_state['info'][$step]['born']) ? $form_state['info'][$step]['born'] : $result['DateBorn'];
+
+        $LastName = isset($form_state['info'][$step]['last_names']) ? $form_state['info'][$step]['last_names'] : $result['LastName'];
+
+        $Gender = isset($form_state['info'][$step]['gender']) ? $form_state['info'][$step]['gender'] : $result['Gender'];
+
+        $form_state['info'][$step]['back_step'] = FALSE;
+
+      }
+      else {
+
+        $Plate = isset($result['Plate']) ? $result['Plate'] : '';
+
+        $Name = isset($result['Name']) ? $result['Name'] : '';
+
+        $Identification = isset($result['Identification']) ? $result['Identification'] : '';
+
+        $Address = isset($result['Address']) ? $result['Address'] : $result['Address'];
+
+        $TelephoneNumber = isset($result['TelephoneNumber']) ? $result['TelephoneNumber'] : '';
+
+        $TelephoneNumber2 = isset($result['TelephoneNumber2']) ? $result['TelephoneNumber2'] : '';
+
+        $EMail = isset($result['EMail']) ? $result['EMail'] : '';
+
+        $IdDeptoUse = isset($result['IdDeptoUse']) ? $result['IdDeptoUse'] : '';
+
+        $Chassis = isset($result['Chassis']) ? $result['Chassis'] : '';
+
+        $DateBorn = isset($result['DateBorn']) ? $result['DateBorn'] : '';
+
+        $LastName = isset($result['LastName']) ? $result['LastName'] : '';
+
+        $Gender = isset($result['Gender']) ? $result['Gender'] : '';
+
+
+      }
+      $form['update'] = array(
+        '#title'       => t('4. ACTUALIZA TUS DATOS'),
+        '#type'        => 'fieldset',
+        '#prefix'      => '<div id="update-info">',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+        '#suffix'      => '</div>',
+      );
+      $form['update']['placa'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Placa'),
+        '#maxlength'     => 100,
+        '#default_value' => isset($Plate) ? $Plate : '',
+        '#disabled'      => TRUE,
+        '#weight'        => 1,
+      );
+      $form['update']['chassis2'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Chasis'),
+        '#attributes'    => array('class' => array('text_chassis')),
+        '#default_value' => isset($Chassis) ? $Chassis : '',
+        '#disabled'      => TRUE,
+        '#weight'        => 2,
+      );
+      $form['update']['names'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Names'),
+        '#maxlength'     => 100,
+        '#default_value' => isset($Name) ? $Name : '',
+        '#required'      => TRUE,
+        '#weight'        => 3,
+      );
+      $form['update']['document'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Document'),
+        '#default_value' => isset($Identification) ? $Identification : '',
+        '#required'      => TRUE,
+        '#weight'        => 4,
+      );
+      $form['update']['last_names'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Last names'),
+        '#maxlength'     => 100,
+        '#default_value' => isset($LastName) ? $LastName : '',
+        '#required'      => TRUE,
+        '#weight'        => 5,
+      );
+      $form['update']['gender'] = array(
+        '#type'          => 'radios',
+        '#title'         => t('Gender'),
+        '#options'       => array('M' => t('Male'), 'F' => t('Female')),
+        '#default_value' => isset($Gender) ? $Gender : '',
+        '#required'      => TRUE,
+        '#weight'        => 6,
+      );
+      $form['update']['state'] = array(
+        '#type'          => 'select',
+        '#title'         => 'Departamento',
+        '#options'       => $states,
+        '#default_value' => isset($IdDeptoUse) ? $IdDeptoUse : '',
+        '#required'      => TRUE,
+        '#ajax'          => array(
+          'callback' => '_akt_forms_update_ajax',
+          'wrapper'  => 'akt-updata-city',
+        ),
+        '#weight'        => 7,
+      );
+      // Cities.
+      if (isset($form_state['values']['state'])) {
+        $cities = akt_ws_GetDataCity($form_state['values']['state']);
+      }
+      else {
+        $cities = isset($result['IdDeptoUse']) ? akt_ws_GetDataCity($result['IdDeptoUse']) : array();
+      }
+      $form['update']['city'] = array(
+        '#prefix'        => '<div id="akt-updata-city">',
+        '#suffix'        => '</div>',
+        '#type'          => 'select',
+        '#title'         => t('City'),
+        '#options'       => $cities,
+        '#default_value' => isset($IdCityUse) ? $IdCityUse : '',
+        '#required'      => TRUE,
+        '#weight'        => 8,
+      );
+      $form['update']['cell_phone'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Phone'),
+        '#maxlength'     => 14,
+        '#default_value' => isset($TelephoneNumber) ? $TelephoneNumber : '',
+        '#required'      => TRUE,
+        '#weight'        => 9,
+      );
+      $form['update']['address'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Address'),
+        '#maxlength'     => 100,
+        '#default_value' => isset($Address) ? $Address : '',
+        '#required'      => TRUE,
+        '#weight'        => 10,
+      );
+
+      $date_explode = explode('/', $DateBorn);
+      $date_explode_year_hour = explode(' ', $date_explode[2]);
+      $date_change_format = $date_explode_year_hour[0] . '-' . $date_explode[1] . '-' . $date_explode[0];
+      $time = strtotime($date_change_format);
+      $new_format_date = date('Y-m-d', $time);
+
+      $form['update']['born'] = array(
+        '#title'           => t('Birthday'),
+        '#type'            => 'date_popup',
+        '#date_format'     => 'Y-m-d',
+        '#date_year_range' => '-90:-10',
+        '#required'        => TRUE,
+        '#default_value'   => isset($new_format_date) ? $new_format_date : '',
+        '#weight'        => 11,
+      );
+      $form['update']['phone'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Cell phone'),
+        '#required'      => TRUE,
+        '#maxlength'     => 14,
+        '#default_value' => isset($TelephoneNumber2) ? $TelephoneNumber2 : '',
+        '#weight'        => 12,
+      );
+      $form['update']['email'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Email'),
+        '#maxlength'     => 100,
+        '#default_value' => isset($EMail) ? $EMail : '',
+        '#required'      => TRUE,
+        '#weight'        => 13,
+      );
+      $form['update']['toc'] = array(
+        '#type'          => 'checkbox',
+        '#title'         => t('Authorize the use of my <a href="@pidecita" target="_blank">data</a>', array('@pidecita' => url('node/5228'))),
+        '#default_value' => 1,
+        '#required'      => TRUE,
+        '#weight'        => 14,
+      );
+      $form['update']['tyc'] = array(
+        '#type'          => 'item',
+        '#title'         => t('See <a href="@link" target="_blank">terms and conditions</a> scheduling appointment', array('@link' => url('node/1078'))),
+        '#weight'        => 15,
+      );
+      $form['back'] = array(
+        '#type'                    => 'submit',
+        '#value'                   => t('Back'),
+        '#id'                      => 'back',
+        '#limit_validation_errors' => array(),
+        '#submit'                  => array('ajax_form_multistep_back_submit'),
+        '#ajax'                    => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+      );
+      $form['submit'] = array(
+        '#type'  => 'submit',
+        '#value' => t('Next'),
+        '#id'    => 'next',
+        '#ajax'  => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+      );
+      break;
+
+    case 5:
+
+      $form['update'] = array(
+        '#title'       => t('5. CONFIRMACIÓN'),
+        '#type'        => 'fieldset',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+      );
+      $form['update']['date_info'] = array(
+        '#title'       => t('DATOS DE LA CITA'),
+        '#type'        => 'fieldset',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+      );
+
+      $query = db_select('node', 'n');
+      $query->join('field_data_field_address_center', 'fcad', 'fcad.entity_id=n.nid');
+      $result = $query->fields('fcad', array('field_address_center_value'))
+        ->condition('n.type', 'service_centers')
+        ->condition('n.title', $form_state['info'][1]['center_service'])
+        ->execute()
+        ->fetchField();
+      $addres = ($result) ? ' - ' . $result : '';
+
+      $form['update']['date_info']['center'] = array(
+        '#prefix' => '<div id="centerservice">',
+        '#markup' => '<p class="label">Centro de Servicio: </p>' . '<p class="dato">' . $form_state['info'][1]['center_service'] . '</p>' . $addres,
+        '#suffix' => '</div>',
+        '#weight' => 1,
+      );
+      $form['update']['date_info']['date'] = array(
+        '#prefix' => '<div id="date">',
+        '#markup' => '<p class="label">Fecha: </p>' . '<p class="dato">' . $form_state['info'][2]['date'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 2,
+      );
+      $form['update']['date_info']['hour'] = array(
+        '#prefix' => '<div id="hour">',
+        '#markup' => '<p class="label">Hora: </p>' . '<p class="dato">' . $form_state['info'][2]['hour'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 3,
+      );
+      $form['update']['date_info']['state'] = array(
+        '#prefix' => '<div id="state">',
+        '#markup' => '<p class="label" >Departamento: </p>' . '<p class="dato">' . $form_state['info'][1]['department'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 4,
+      );
+      $form['update']['date_info']['city'] = array(
+        '#prefix' => '<div id="ciudad">',
+        '#markup' => '<p class="label">Ciudad: </p>' . '<p class="dato">' . $form_state['info'][1]['city'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 5,
+      );
+      $form['update']['date_info']['type_date'] = array(
+        '#prefix' => '<div id="type_date">',
+        '#markup' => '<p class="label">Tipo de servicio: </p>' . '<p class="dato">' . $form_state['info'][1]['type_date'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 6,
+      );
+      $form['update']['date_info']['kilometraje'] = array(
+        '#prefix' => '<div id="kilometraje">',
+        '#markup' => '<p class="label"> Kilometraje actual: </p>' . '<p class="dato">' . $form_state['info'][1]['kilometraje'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 7,
+      );
+      $form['update']['basic_info'] = array(
+        '#title'       => t('DATOS PERSONALES'),
+        '#type'        => 'fieldset',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+        '#weight' => 8,
+      );
+      $form['update']['basic_info']['plate'] = array(
+        '#prefix' => '<div id="plate">',
+        '#markup' => '<p class="label"> Placa: </p>' . '<p class="dato">' . $form_state['info'][4]['placa'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 9,
+      );
+      $form['update']['basic_info']['name'] = array(
+        '#prefix' => '<div id="names">',
+        '#markup' => '<p class="label">Nombres: </p>' . '<p class="dato">' . $form_state['info'][4]['names'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 10,
+      );
+      $form['update']['basic_info']['lastname'] = array(
+        '#prefix' => '<div id="lastname">',
+        '#markup' => '<p class="label">Apellidos: </p>' . '<p class="dato">' . $form_state['info'][4]['last_names'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 11,
+      );
+      $form['update']['basic_info']['identificaton'] = array(
+        '#prefix' => '<div id="identificaton">',
+        '#markup' => '<p class="label">Documento: </p>' . '<p class="dato">' . $form_state['info'][4]['document'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 12,
+      );
+      $form['update']['basic_info']['TelephoneNumber'] = array(
+        '#prefix' => '<div id="TelephoneNumber">',
+        '#markup' => '<p class="label">Telefono: </p>' . '<p class="dato">' . $form_state['info'][4]['phone'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 13,
+      );
+      $form['update']['basic_info']['TelephoneNumber2'] = array(
+        '#prefix' => '<div id="TelephoneNumber2">',
+        '#markup' => '<p class="label">Celular </p>' . '<p class="dato">' . $form_state['info'][4]['cell_phone'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 14,
+      );
+      $form['update']['basic_info']['EMail'] = array(
+        '#prefix' => '<div id="EMail">',
+        '#markup' => '<p class="label">Correo Electonico </p>' . '<p class="dato">' . $form_state['info'][4]['email'] . '</p>',
+        '#suffix' => '</div>',
+        '#weight' => 15,
+      );
+
+      $form['cancelar'] = array(
+        '#prefix' => '<a href="landing_pide_tu_cita" class="link_cancelar" >',
+        '#markup' => 'CANCELAR CITA',
+        '#suffix' => '</a>',
+        '#weight' => 16,
+      );
+      $form['back'] = array(
+        '#type'                    => 'submit',
+        '#value'                   => t('Back'),
+        '#id'                      => 'back',
+        '#limit_validation_errors' => array(),
+        '#submit'                  => array('ajax_form_multistep_back_submit'),
+        '#ajax'                    => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+        '#weight' => 17,
+      );
+      $form['back2'] = array(
+        '#type'                    => 'submit',
+        '#value'                   => t('modify appointment'),
+        '#id'                      => 'back-calendar',
+        '#limit_validation_errors' => array(),
+        '#submit'                  => array('ajax_form_multistep_back_step_1_submit'),
+        '#ajax'                    => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+        '#weight' => 18,
+      );
+      $form['submit'] = array(
+        '#type'  => 'submit',
+        '#value' => 'Confirmar',
+        '#id'    => 'next',
+        '#ajax'  => array(
+          'wrapper'  => 'akt-scheduling-appointments-form',
+          'callback' => 'scheduling_appointments_form_callback',
+          'effect'   => 'fade',
+          'method'   => 'replace',
+        ),
+        '#weight' => 19,
+      );
+      ctools_include('modal');
+      ctools_modal_add_js();
+
+      break;
+
+    case 6:
+      $form['date_info'] = array(
+        '#type'        => 'fieldset',
+        '#collapsible' => FALSE,
+        '#collapsed'   => FALSE,
+      );
+      $form['date_info']['head'] = array(
+        '#prefix' => '<div id="head">',
+        '#markup' => '<p class="label">Gracias!</p>',
+        '#suffix' => '</div>',
+      );
+      $form['date_info']['body'] = array(
+        '#prefix' => '<div id="body">',
+        '#markup' => '<p class="label">Su cita ha sido agendada exitosamente </p>',
+        '#suffix' => '</div>',
+      );
+      $form['date_info']['footer'] = array(
+        '#prefix' => '<div id="footer">',
+        '#markup' => '<p class="label" > Los datos de la cita han sido enviados al correo electronico:</p>',
+        '#suffix' => '</div>',
+      );
+      $form['date_info']['email'] = array(
+        '#prefix' => '<div id="email">',
+        '#markup' => '<p class="label" >' . $form_state['info'][4]['email'] . ' </p>',
+        '#suffix' => '</div>',
+      );
+
+      $query = db_select('scheduling_appointments', 's')
+        ->fields('s', array('id_appointment', 'reservation_code', 'chasis'));
+      $query->condition('s.chasis', $form_state['info'][4]['chassis2'], '=');
+      $query->condition('s.state', 'Agendada', '=');
+      $result = $query->execute();
+      $reservation_code = $result->fetchAssoc();
+
+      $form['date_info']['submit_four'] = array(
+        '#prefix' => '<div id="codigo">',
+        '#markup' => '<p class="label" >Codigo de reserva:</p><p class= "datos">' . $reservation_code['reservation_code'] . '</p>',
+        '#suffix' => '</div>',
+      );
+      $form['date_info']['chasis'] = array(
+        '#prefix' => '<div id="chasis">',
+        '#markup' => '<p class="label" >Chasis:</p><p class= "datos">' . $reservation_code['chasis'] . '</p>',
+        '#suffix' => '</div>',
+      );
+      $form ['date_info']['aceptar'] = array(
+        '#type'   => 'submit',
+        '#value'  => t('ACCEPT'),
+        '#submit' => array('formulario_form_pagina_cuatro_submit'),
+      );
+
+      break;
+  }
+
+  return $form;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function scheduling_appointments_form_alter( &$form, &$form_state,$form_id ){
+  $detect = mobile_detect_get_object();
+  $is_mobile = $detect->isMobile();
+  switch ($form_id) {
+    case 'scheduling_appointments_form':
+      if ($is_mobile) {
+        $step = $form_state['storage']['step'];
+        switch ($step) {
+          case 1:
+            $form['description'] = array(
+              '#type' => 'item',
+              '#prefix' => '<span class = "description-mobil">',
+              '#markup' => t('Below you will find the step by step to request an appointment'),
+              '#suffix' => '</span>',
+              '#weight' => -1,
+            );
+            $form['date_information']['department']['#title'] = '';
+            $form['date_information']['department']['#empty_option'] = t('Select a state');
+            $form['date_information']['department']['#description'] = '';
+            $form['date_information']['city']['#title'] = '';
+            $form['date_information']['city']['#empty_option'] = t('Select a city');
+            $form['date_information']['city']['#description'] = '';
+            $form['date_information']['center_service']['#title'] = '';
+            $form['date_information']['center_service']['#empty_option'] = t('Select a service center');
+            $form['date_information']['center_service']['#description'] = '';
+            $form['date_information']['type_date']['#title'] = '';
+            $form['date_information']['type_date']['#empty_option'] = t('Select the appointment type');
+            $form['date_information']['type_date']['#description'] = '';
+            $form['date_information']['kilometraje']['#title'] = '';
+            $form['date_information']['kilometraje']['#attributes']['placeholder'] = t('Write the current mileage');
+            $form['date_information']['kilometraje']['#description'] = '';
+            $form['coments_field']['coments']['#title'] = '';
+            $form['coments_field']['coments']['#attributes']['placeholder'] = t('Specify us what additional service you require');
+            $form['submit']['#attributes']['class'][] = 'voci-comment-form';
+            break;
+
+          case 2:
+            $form['date_hour_schedule']['#title'] = t('3. Select date');
+            $form['date_hour']['legend_container']['grey'] = array(
+              '#type' => 'container',
+              '#attributes' => array('class' => array(drupal_html_class('grey'))),
+            );
+            $form['date_hour']['legend_container']['grey']['label'] = array(
+              '#prefix' => '<p class = "text_legend">',
+              '#markup' => t('Selected day'),
+              '#suffix' => '</p>',
+            );
+            $form['date_hour']['legend_container']['blue']['label']['#markup'] = t('Days available');
+            $form['date_hour']['legend_container']['red']['label1']['#markup'] = t('Days not available');
+            $form['date_hour']['widget_date_container']['widget_date_hour']['widget_hour']['title_date']['#weight'] = 3;
+            $form['date_hour']['widget_date_container']['widget_date_hour']['widget_hour']['title'] = array(
+              '#type' => 'item',
+              '#markup' => '<legend><span class="fieldset-legend">SELECCIONA EL HORARIO</span></legend>',
+              '#weight' => 1,
+            );
+            $form['date_hour']['widget_date_container']['widget_date_hour']['widget_hour']['description'] = array(
+              '#type' => 'item',
+              '#prefix' => '<span class = "description-movil">',
+              '#markup' => t('Office hours 08:00 a.m. - 07:00 pm.'),
+              '#suffix' => '</span>',
+              '#weight' => 2,
+            );
+            $form['date_hour']['widget_date_container']['widget_date_hour']['widget_hour']['container'] = array(
+              '#prefix' => '<ul class="hours-movil">',
+              '#suffix' => '</ul>',
+              '#weight' => 4,
+            );
+            $form['submit']['#attributes']['id'] = 'next-arrow';
+            break;
+
+          case 3:
+            $form['update']['#title'] = t('4. Chassis number');
+            $form['update']['instruction']['#markup'] = t('Enter the number of your chassis');
+            $form['submit']['#attributes']['id'] = 'next-arrow';
+            $form['back']['#attributes']['id'] = 'back-arrow';
+            break;
+
+          case 4:
+            $form['update']['#title'] = t('5. Update data');
+            $form['update']['last_names']['#weight'] = 4;
+            $form['update']['document']['#weight'] = 5;
+            $form['submit']['#attributes']['id'] = 'next-arrow';
+            break;
+
+          case 5:
+            $form['update']['#title'] = t('6. confirmation');
+            $form['submit']['#value'] = t('Confirm appointment');
+            $form['back']['#weight'] = 19;
+            $form['back2']['#weight'] = 18;
+            $form['submit']['#weight'] = 17;
+            $form['submit']['#attributes']['class'][] = 'btn-next-confirm';
+            $form['back']['#attributes']['class'][] = 'btn-back-confirm';
+            break;
+        }
+      }
+      break;
+
+    case 'scheduling_appointments_cancel_form':
+      if ($is_mobile) {
+        $form['contenedor_confirma_cita']['atras']['#href'] = 'landing-pide-tu-cita';
+        $form['contenedor_confirma_cita']['chasis']['#attributes']['class'][] = 'edit-chassis-mobile';
+      }
+      break;
+  }
+}
+
+/**
+ * Form ajax callback to return to step 1.
+ */
+function formulario_form_pagina_cuatro_submit(&$form, &$form_state) {
+  drupal_goto('landing_pide_tu_cita');
+}
+
+/**
+ * Form ajax callback.
+ */
+function scheduling_appointments_form_callback(&$form, &$form_state) {
+
+  if ($form['step']['#value'] == 6) {
+    $detect = mobile_detect_get_object();
+    $is_mobile = $detect->isMobile();
+
+    if ($is_mobile) {
+      ctools_include('ajax');
+      ctools_include('modal');
+      $title = t('Thank you');
+      $output = $form['date_info']['body']['#markup'];
+      $output .= $form['date_info']['footer']['#markup'];
+      $output .= '<div id="email">' . $form['date_info']['email']['#markup'] . '</div>';
+      $output .= '<div class="info-reservation">';
+      $output .= '<div id="code">' . $form['date_info']['submit_four']['#markup'] . '</div>';
+      $output .= '<div id="chassis">' . $form['date_info']['chasis']['#markup'] . '</div>';
+      $output .= '</div>';
+      $commands[] = ctools_modal_command_display($title, $output);
+      print ajax_render($commands);
+      drupal_exit();
+    } else {
+      return $form;
+    }
+  } else {
+    return $form;
+  }
+}
+
+/**
+ * Form ajax callback.
+ */
+function _akt_forms_update_ajax($form, &$form_state) {
+  return $form['update']['city'];
+}
+
+/**
+ * Form validate.
+ */
+function scheduling_appointments_form_validate(&$form, &$form_state) {
+  $step = (isset($form_state['values']['step'])) ? $form_state['values']['step'] : $form_state['storage']['step'];
+
+  switch ($step) {
+    case 1:
+      $comments = $form_state['values']['coments'];
+      $kilm = $form_state['values']['kilometraje'];
+      if ($kilm && !is_numeric($kilm)) {
+        form_set_error('kilometraje', t('Kilometraje should be numeric'));
+      }
+      if ($comments && strlen($comments) > 250) {
+        form_set_error('coments', t('Comments should be maximum of 250 characters'));
+      }
+      break;
+
+    case 3:
+      $user_name = 'aktwebcst';
+      $password = '$akt80757975gtk%.$';
+      $chassis = $form_state['values']['chassis'];
+      $client = new nusoap_client('http://cst.aktmotos.com/updatebuyer/updatebuyer.asmx?WSDL', TRUE);
+      $client->namespaces['tem'] = 'http://cst.aktmotos.com';
+      $params = "<tem:GetDataSaleByMotorcycle><tem:chasis>$chassis</tem:chasis></tem:GetDataSaleByMotorcycle>";
+      $headers = "<tem:WSHeadBuyer><tem:userName>$user_name</tem:userName><tem:userPassword>$password</tem:userPassword></tem:WSHeadBuyer>";
+      $result = $client->call('GetDataSaleByMotorcycle', $params, 'tem', '', $headers);
+
+      if (!isset($result['GetDataSaleByMotorcycleResult']['Chassis'])) {
+        form_set_error('chassis', 'Por favor verifica tu número de chasis e inténtalo de nuevo.');
+      }
+
+      $query_chasis = db_select('scheduling_appointments', 's')
+        ->fields('s', array('id_appointment', 'reservation_code', 'chasis'));
+      $query_chasis->condition('s.chasis', $form_state['values']['chassis'], '=');
+      $query_chasis->condition('s.state', 'Agendada', '=');
+      $result_chasis = $query_chasis->execute();
+      $validation = 0;
+      while ($aux = $result_chasis->fetchAssoc()) {
+        if (isset($aux['chasis'])) {
+          $validation = 1;
+        }
+      }
+      $chasis = $form_state['values']['chassis'];
+
+      if ($validation == 1) {
+        form_set_error('chassis', 'Lo sentimos pero ya exite una cita activa para este número de chassis');
+
+        $form['update']['consultar_cita'] = array(
+          '#prefix' => "<br><a href=consulta_tu_cita?c=$chasis class='link_consultar' >",
+          '#markup' => 'Consultar la cita agendada',
+          '#suffix' => '</a>',
+        );
+      }
+      $form_state['storage']['result'] = $result;
+
+      break;
+
+    case 5:
+      // Validar si la fecha aun estan disponibles.
+      $date = $form_state['info'][2]['date'];
+      $hour = $form_state['info'][2]['hour'];
+      $date2 = date('m-d-Y', strtotime($date));
+      $unable_days = _scheduling_appointments_update_calendar($form_state['info'][1]['center_service'], $form_state);
+      $search = in_array($date2, $unable_days);
+      if ($search == TRUE) {
+        form_set_error('date', 'Lo sentimos pero esta fecha ya no se encuentra disponible');
+      }
+
+      // Validar si la hora aun no esta disponible.
+      $ajax = FALSE;
+      $enable_hours = scheduling_appointments_schedule($ajax, $form_state['info'][1]['center_service'], $date);
+      $search_hour = in_array($hour, $enable_hours);
+
+      if ($search_hour == FALSE) {
+        form_set_error('hour', 'Lo sentimos pero esta hora ya no se encuentra disponible');
+      }
+      break;
+  }
+}
+
+/**
+ * Form submit.
+ */
+function scheduling_appointments_form_submit(&$form, &$form_state) {
+  $step = (isset($form_state['values']['step'])) ? $form_state['values']['step'] : $form_state['storage']['step'];
+  $form_state['info'][$step] = $form_state['values'];
+  $information = array($form_state['values']['department'], $form_state['values']['city'], $form_state['values']['center_service'], $form_state['values']['type_date']);
+
+  if ($step == 1) {
+    drupal_add_js(array('scheduling_appointments' => array('information' => $information)), 'setting');
+  }
+
+  if ($step == 4) {
+    _update_info_web_services($form, $form_state);
+  }
+
+  if ($step == 5) {
+    _save_info_appointments($form, $form_state);
+  }
+
+  if ($form_state['clicked_button']['#id'] == 'next') {
+    $form_state['storage']['step'] = ++$form_state['storage']['step'];
+    $form_state['rebuild'] = TRUE;
+  }
+
+  if ($form_state['clicked_button']['#id'] == 'back') {
+    if ($step == 5) {
+      $form_state['info'][4]['back_step'] = TRUE;
+    }
+  }
+}
+
+/**
+ * Form to update info from webservice.
+ */
+function _update_info_web_services(&$form, &$form_state) {
+  $error = FALSE;
+  $document = $form_state['values']['document'];
+  $cell = $form_state['values']['cell_phone'];
+  $phone = $form_state['values']['phone'];
+  $email = $form_state['values']['email'];
+
+  if (!is_numeric($document)) {
+    form_set_error('document', t('Invalid document'));
+    $error = TRUE;
+  }
+  if (!is_numeric($cell)) {
+    form_set_error('cell_phone', t('Invalid number phone'));
+    $error = TRUE;
+  }
+  if (!empty($phone) && !is_numeric($phone)) {
+    form_set_error('phone', t('Invalid number phone'));
+    $error = TRUE;
+  }
+  if (!empty($email) && !valid_email_address($email)) {
+    form_set_error('phone', t('Invalid email address'));
+    $error = TRUE;
+  }
+
+  if ($error == FALSE) {
+
+    if (!empty($form_state['info'][4])) {
+      $form_state['values'] = $form_state['info'][4];
+    }
+
+    $form_state['storage']['values'][$step] = $form_state['values'];
+    $plate = $form_state['values']['placa'];
+    $names = $form_state['values']['names'];
+    $document = $form_state['values']['document'];
+    $address = $form_state['values']['address'];
+    $cell = $form_state['values']['cell_phone'];
+    $phone = $form_state['values']['phone'];
+    $email = $form_state['values']['email'];
+    $id_type_use = $form_state['storage']['result']['GetDataSaleByMotorcycleResult']['IdTypeUse'];
+    $city = $form_state['values']['city'];
+    $state = $form_state['values']['state'];
+    $chassis = $form_state['info'][4]['chassis2'];
+    $gender = $form_state['values']['gender'];
+    $quarter = $form_state['storage']['result']['GetDataSaleByMotorcycleResult']['Quarter'];
+    $last_names = $form_state['values']['last_names'];
+    $date_born = $form_state['values']['born'];
+    $type_pay = $form_state['storage']['result']['GetDataSaleByMotorcycleResult']['TypePay'];
+    $fields = array(
+      'Plate'            => $plate,
+      'Name'             => $names,
+      'Identification'   => $document,
+      'Address'          => $address,
+      'TelephoneNumber'  => $cell,
+      'TelephoneNumber2' => $phone,
+      'EMail'            => $email,
+      'IdTypeUse'        => $id_type_use,
+      'IdCityUse'        => $city,
+      'IdDeptoUse'       => $state,
+      'Chassis'          => $chassis,
+      'Gender'           => $gender,
+      'DateBorn'         => $date_born,
+      'Quarter'          => $quarter,
+      'LastName'         => $last_names,
+      'TypePay'          => $type_pay,
+    );
+
+    $citys = akt_ws_GetDataCity($state);
+    foreach ($citys as $key => $value) {
+      if ($key == $city) {
+        $city = $value;
+      }
+    }
+    $app = _get_application('Pide tu cita');
+    $fields_db = array(
+      'plate_userdb'           => $plate,
+      'chasis_userdb'          => $chassis,
+      'name_userdb'            => $names,
+      'last_name_userdb'       => $last_names,
+      'identification_userdb'  => $document,
+      'gender_userdb'          => $gender,
+      'phone_userdb'           => $phone,
+      'state_userdb'           => $state,
+      'city_userdb'            => $city,
+      'address_userdb'         => $address,
+      'date_born_userdb'       => $date_born,
+      'mobile_phone_userdb'    => $cell,
+      'email_userdb'           => $email,
+      'date'                   => REQUEST_TIME,
+      'tid_application_userdb' => $app,
+    );
+
+    _update_info_usersdb($chassis, $fields_db);
+
+    $resultado = akt_ws_UpdateBuyerByMotorcycle($fields);
+    if ($resultado) {
+      drupal_set_message(t('Thanks for update your information'));
+    }
+    else {
+      drupal_set_message(t('The system was not able to update your information. Please try again later.'), 'error');
+    }
+  }
+}
+
+/**
+ * Form to save info into DB drupal.
+ */
+function _save_info_appointments(&$form, &$form_state) {
+
+  global $language;
+  global $user;
+
+  $id_user = $user->uid;
+  $name_user = $user->name;
+
+  if (!isset($name_user)) {
+    $name_user = 'Anonimo';
+  }
+
+  $query_taxonomy = db_select('taxonomy_term_data', 'ttd')
+    ->fields('ttd', array('tid'));
+  $query_taxonomy->innerJoin('taxonomy_vocabulary', 'tv', 'tv.vid = ttd.vid');
+  $query_taxonomy->condition('tv.machine_name', 'tipos_de_servicios', '=');
+  $query_taxonomy->condition('ttd.name', $form_state['info'][1]['type_date'], '=');
+  $result = $query_taxonomy->execute();
+  $taxonomy = $result->fetchAssoc();
+  $tid_type_services = $taxonomy['tid'];
+
+  $query_taxonomy = db_select('taxonomy_term_data', 'ttd')
+    ->fields('ttd', array('tid'));
+  $query_taxonomy->innerJoin('taxonomy_vocabulary', 'tv', 'tv.vid = ttd.vid');
+  $query_taxonomy->condition('tv.machine_name', 'cities_departments', '=');
+  $query_taxonomy->condition('ttd.name', $form_state['info'][1]['department'], '=');
+  $result = $query_taxonomy->execute();
+  $taxonomy = $result->fetchAssoc();
+  $tid_department = $taxonomy['tid'];
+
+  $query_taxonomy = db_select('taxonomy_term_data', 'ttd')
+    ->fields('ttd', array('tid'));
+  $query_taxonomy->innerJoin('taxonomy_vocabulary', 'tv', 'tv.vid = ttd.vid');
+  $query_taxonomy->condition('tv.machine_name', 'cities_departments', '=');
+  $query_taxonomy->condition('ttd.name', $form_state['info'][1]['city'], '=');
+  $result = $query_taxonomy->execute();
+  $taxonomy = $result->fetchAssoc();
+  $tid_city = $taxonomy['tid'];
+
+  $query_id_center = db_select('node', 'n')
+    ->fields('n', array('nid'));
+  $query_id_center->condition('n.title', $form_state['info'][1]['center_service']);
+  $query_id_center->condition('n.type', 'service_centers');
+  $result = $query_id_center->execute();
+  $id_center = $result->fetchAssoc();
+
+  if (isset($tid_type_services) && isset($id_center)) {
+    $query = db_select('motorcycle_owner', 'mo')
+      ->fields('mo', array('identification_owner'));
+    $query->condition('mo.identification_owner', $form_state['info'][4]['document'], '=');
+    $result = $query->execute();
+    $aux = $result->fetchAssoc();
+
+    if (!isset($aux['identification_owner'])) {
+
+      $save_owner = db_insert('motorcycle_owner')// Table name no longer needs {}
+      ->fields(array(
+        'identification_owner' => $form_state['info'][4]['document'], 'name_owner' => $form_state['info'][4]['names'], 'last_name_owner' => $form_state['info'][4]['last_names'], 'address_owner' => $form_state['info'][4]['address'], 'date_born_owner' => $form_state['info'][4]['born'], 'phone_owner' => $form_state['info'][4]['phone'], 'mobile_phone' => $form_state['info'][4]['cell_phone'], 'email_owner' => $form_state['info'][4]['email'],
+
+      ))->execute();
+    }
+    else {
+      db_update('motorcycle_owner')
+        ->fields(array(
+          'name_owner' => $form_state['info'][4]['names'], 'last_name_owner' => $form_state['info'][4]['last_names'], 'address_owner' => $form_state['info'][4]['address'], 'date_born_owner' => $form_state['info'][4]['born'], 'phone_owner' => $form_state['info'][4]['phone'], 'mobile_phone' => $form_state['info'][4]['cell_phone'], 'email_owner' => $form_state['info'][4]['email'],
+        ))
+        ->condition('identification_owner', $form_state['info'][4]['document'], '=')
+        ->execute();
+    }
+
+    $timestamp = strtotime($form_state['info'][2]['date'] . ' ' . $form_state['info'][2]['hour'] . ':00');
+    $timeint = (int) $timestamp;
+    $day_week = date("N", $timeint);
+
+    if ($day_week < 6) {
+      $calendar_type = 1;//1 Lunes a Viernes
+    }
+    if ($day_week == 6) {
+      $calendar_type = 2;//2 Sabados
+    }
+    $save = FALSE;
+
+    while ($save == FALSE) {
+      $code = unique_id();
+      $query = db_select('scheduling_appointments', 's')
+        ->fields('s', array('id_appointment'));
+      $query->condition('s.reservation_code', $code, '=');
+      $result = $query->execute();
+      $id_scheduling = $result->fetchAssoc();
+
+      if (!isset($id_scheduling['id_appointment'])) {
+        $save_appointments = db_insert('scheduling_appointments')
+          ->fields(array(
+            'reservation_code' => $code, 'uid' => $id_user, 'tid_department' => $tid_department, 'tid_city' => $tid_city, 'tid_type_services' => $tid_type_services, 'id_center_services' => $id_center['nid'], 'mileage' => $form_state['info'][1]['kilometraje'], 'comments' => $form_state['info'][1]['coments'], 'date' => $timeint, 'chasis' => $form_state['info'][4]['chassis2'], 'plate' => $form_state['info'][4]['placa'], 'identification_owner' => $form_state['info'][4]['document'], 'state' => 'Agendada', 'calendar_type' => $calendar_type, 'created' => REQUEST_TIME,
+          ))->execute();
+        $save = TRUE;
+      }
+      else {
+        $save = FALSE;
+      }
+    }
+
+    $query = db_select('scheduling_appointments', 's')
+      ->fields('s', array('id_appointment'));
+    $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+    $query->condition('s.chasis', $form_state['info'][4]['chassis2'], '=');
+    $query->condition('ac.bundle', 'service_centers', '=');
+    $query->condition('s.state', 'Agendada', '=');
+    $query->addField('ac', 'field_address_center_value', 'address_center');
+    $result = $query->execute();
+    $aux = $result->fetchAssoc();
+
+    $params = array(
+      'codigo_reserva'  => $code,
+      'centro_servicio' => $form_state['info'][1]['center_service'],
+      'fecha'           => $form_state['info'][2]['date'],
+      'hora'            => $form_state['info'][2]['hour'],
+      'departamento'    => $form_state['info'][1]['department'],
+      'ciudad'          => $form_state['info'][1]['city'],
+      'tipo_servicio'   => $form_state['info'][1]['type_date'],
+      'placa'           => $form_state['info'][4]['placa'],
+      'nombres'         => $form_state['info'][4]['names'],
+      'apellidos'       => $form_state['info'][4]['last_names'],
+      'direccion'       => $form_state['info'][4]['address'],
+      'email'           => $form_state['info'][4]['email'],
+      'tel_contacto'    => $form_state['info'][4]['phone'],
+      'celular'         => $form_state['info'][4]['cell_phone'],
+      'observaciones'   => $form_state['info'][1]['coments'],
+      'address_center'  => $aux['address_center'],
+    );
+
+    $query_email_center = db_select('node', 'n')
+      ->fields('n', array('nid'));
+    $query_email_center->innerJoin('field_data_field_email_admin', 'fde', 'fde.entity_id = n.nid');
+    $query_email_center->condition('n.title', $form_state['info'][1]['center_service'], '=');
+    $query_email_center->condition('fde.bundle', 'service_centers', '=');
+    $query_email_center->condition('n.type', 'service_centers', '=');
+    $query_email_center->addField('fde', 'field_email_admin_email', 'email');
+    $result = $query_email_center->execute();
+    $email_center = $result->fetchAssoc();
+    $mail_admin = $email_center['email'];
+
+    drupal_mail('scheduling_appointments', 'confirmacion_cita', $form_state['info'][4]['email'], $language, $params);
+
+    if (isset($mail_admin)) {
+      drupal_mail('scheduling_appointments', 'confirmacion_cita_centro', $mail_admin, $language, $params);
+    }
+  }
+}
+
+/**
+ * Custom function to update scheduling calendar.
+ */
+function scheduling_appointments_update_calendar($form, &$form_state) {
+  $day = date('m-d-Y');
+  $i = strtotime($day);
+  $day_i = date('m-d-Y', $i);
+  $dates[] = $day_i;
+  drupal_add_js(array('scheduling_appointments' => array('calendar' => $dates)), 'setting');
+  $form_state['info'][1] = $form_state['values'];
+  $form_state['storage']['step'] = ++$form_state['storage']['step'];
+  $form_state['rebuild'] = TRUE;
+
+}
+
+/**
+ * Custom function to get states from taxonomy.
+ */
+function _get_states() {
+  $query = db_select('taxonomy_term_data', 'ttd')
+    ->fields('ttd', array('tid'));
+  $query->innerJoin('field_data_field_departament_city', 'fsc', 'fsc.field_departament_city_tid = ttd.tid');
+  $query->innerJoin('node', 'node', 'node.nid = fsc.entity_id');
+  $query->innerJoin('taxonomy_term_hierarchy', 'tth', 'tth.tid = ttd.tid');
+  $query->innerJoin('taxonomy_term_data', 'ttd2', 'ttd2.tid = tth.parent');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.status', '1', '=');
+  $query->distinct();
+  $query->addField('tth', 'parent', 'parent');
+  $query->addField('ttd', 'name', 'city');
+  $query->addField('ttd2', 'name', 'state');
+  $query->orderBy('ttd2.name', 'ASC');//ORDER BY NAME
+  $result = $query->execute();
+  $states_tree = array();
+
+  while ($aux = $result->fetchAssoc()) {
+    if (!isset($states_tree[$aux['state']])) {
+      $states_tree[$aux['state']] = $aux['state'];
+    }
+  }
+
+  return $states_tree;
+}
+
+/**
+ * Custom function to get cities from taxonomy.
+ */
+function _get_cities_dropdown_options($key = '') {
+  $query = db_select('taxonomy_term_data', 'ttd')
+    ->fields('ttd', array('tid'));
+  $query->innerJoin('field_data_field_departament_city', 'fsc', 'fsc.field_departament_city_tid = ttd.tid');
+  $query->innerJoin('node', 'node', 'node.nid = fsc.entity_id');
+  $query->innerJoin('taxonomy_term_hierarchy', 'tth', 'tth.tid = ttd.tid');
+  $query->innerJoin('taxonomy_term_data', 'ttd2', 'ttd2.tid = tth.parent');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.status', '1', '=');
+  $query->addField('tth', 'parent', 'parent');
+  $query->addField('ttd', 'name', 'city');
+  $query->addField('ttd2', 'name', 'state');
+  $query->orderBy('ttd.name', 'ASC');
+  $result = $query->execute();
+  $states_cities_tree = array();
+
+  while ($aux = $result->fetchAssoc()) {
+    if (!isset($states_cities_tree[$aux['state']])) {
+      $states_cities_tree[$aux['state']] = array();
+    }
+    $states_cities_tree[$aux['state']][$aux['city']] = $aux['city'];
+  }
+
+  if (isset($states_cities_tree[$key])) {
+    return $states_cities_tree[$key];
+  }
+  elseif ($key = 'All') {
+    return $states_cities_tree;
+  }
+  else {
+    return array();
+  }
+}
+
+/**
+ * Get service centers.
+ */
+function _get_centerservice_dropdown_options($city = '') {
+  $query = db_select('node', 'node')
+    ->fields('node', array('nid'));
+  $query->innerJoin('field_data_field_departament_city', 'fdc', 'fdc.entity_id = node.nid');
+  $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = node.nid');
+  $query->innerJoin('taxonomy_term_data', 'ttd2', 'ttd2.tid = fdc.field_departament_city_tid');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.status', '1', '=');
+  $query->distinct();
+  $query->addField('node', 'nid', 'nid');
+  $query->addField('node', 'title', 'title');
+  $query->addField('ttd2', 'name', 'city');
+  $query->addField('ac', 'field_address_center_value', 'address_center');
+  $query->orderBy('node.title', 'ASC');
+  $result = $query->execute();
+
+  $typedate_centerservice_tree = array();
+
+  while ($aux = $result->fetchAssoc()) {
+    if (!isset($typedate_centerservice_tree[$aux['name']])) {
+      $typedate_centerservice_tree[$aux['name']] = array();
+    }
+    $typedate_centerservice_tree[$aux['city']][$aux['title']] = $aux['title'];
+  }
+  $form_state['page_values'][1]['nid'] = $aux['nid'];
+
+  if (isset($typedate_centerservice_tree[$city])) {
+    return $typedate_centerservice_tree[$city];
+  }
+  elseif ($city = 'All') {
+    return $typedate_centerservice_tree;
+  }
+  else {
+    return array();
+  }
+}
+
+/**
+ * Get service centers.
+ */
+function _get_centerservice_dropdown_options_address($city = '') {
+  $query = db_select('node', 'node')
+    ->fields('node', array('nid'));
+  $query->innerJoin('field_data_field_departament_city', 'fdc', 'fdc.entity_id = node.nid');
+  $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = node.nid');
+  $query->innerJoin('taxonomy_term_data', 'ttd2', 'ttd2.tid = fdc.field_departament_city_tid');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.status', '1', '=');
+  $query->distinct();
+  $query->addField('node', 'nid', 'nid');
+  $query->addField('node', 'title', 'title');
+  $query->addField('ttd2', 'name', 'city');
+  $query->addField('ac', 'field_address_center_value', 'address_center');
+  $query->orderBy('node.title', 'ASC');
+
+  $result = $query->execute();
+
+  $typedate_centerservice_tree = array();
+
+  while ($aux = $result->fetchAssoc()) {
+    if (!isset($typedate_centerservice_tree[$aux['name']])) {
+      $typedate_centerservice_tree[$aux['name']] = array();
+    }
+    $typedate_centerservice_tree[$aux['city']][$aux['title']] = $aux['address_center'];
+  }
+  $form_state['page_values'][1]['nid'] = $aux['nid'];
+
+  if (isset($typedate_centerservice_tree[$city])) {
+    return $typedate_centerservice_tree[$city];
+  }
+  elseif ($city = 'All') {
+    return $typedate_centerservice_tree;
+  }
+  else {
+    return array();
+  }
+}
+
+/**
+ * Get type dates.
+ */
+function _get_typedates_dropdown_options($selected_center = '', $selected_city = '') {
+  $query = db_select('node', 'node')
+    ->fields('node', array('nid'));
+  $query->innerJoin('field_data_field_service_types_mf', 'ft', 'ft.entity_id = node.nid');
+  $query->innerJoin('field_data_field_type_service', 'ftc', 'ftc.entity_id = ft.field_service_types_mf_value');
+  $query->innerJoin('taxonomy_term_data', 'ttd', 'ttd.tid = ftc.field_type_service_tid');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.status', '1', '=');
+  $query->distinct();
+  $query->addField('node', 'nid', 'nid');
+  $query->addField('node', 'title', 'title');
+  $query->addField('ftc', 'field_type_service_tid', 'tipo de servicio');
+  $query->addField('ttd', 'name', 'tipo');
+  $query->addField('ttd', 'name', 'name');
+  $query->orderBy('ttd.name', 'ASC');
+  $result = $query->execute();
+
+  $cities_typedate_tree = array();
+
+  while ($aux = $result->fetchAssoc()) {
+    if (!isset($cities_typedate_tree[$aux['title']])) {
+      $cities_typedate_tree[$aux['title']] = array();
+    }
+    $cities_typedate_tree[$aux['title']][$aux['name']] = $aux['name'];
+  }
+
+  // Servicios sabados.
+  $query = db_select('node', 'node')
+    ->fields('node', array('nid'));
+  $query->innerJoin('field_data_field_service_types_s', 'ft', 'ft.entity_id = node.nid');
+  $query->innerJoin('field_data_field_type_service', 'ftc', 'ftc.entity_id = ft.field_service_types_s_value');
+  $query->innerJoin('taxonomy_term_data', 'ttd', 'ttd.tid = ftc.field_type_service_tid');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.status', '1', '=');
+  $query->distinct();
+  $query->addField('node', 'nid', 'nid');
+  $query->addField('node', 'title', 'title');
+  $query->addField('ftc', 'field_type_service_tid', 'tipo de servicio');
+  $query->addField('ttd', 'name', 'tipo');
+  $query->addField('ttd', 'name', 'name');
+  $query->orderBy('ttd.name', 'ASC');
+  $result = $query->execute();
+
+  while ($aux = $result->fetchAssoc()) {
+    if (!isset($cities_typedate_tree[$aux['title']])) {
+      $cities_typedate_tree[$aux['title']] = array();
+    }
+    $cities_typedate_tree[$aux['title']][$aux['name']] = $aux['name'];
+  }
+
+  if (isset($cities_typedate_tree[$selected_center])) {
+    return $cities_typedate_tree[$selected_center];
+  }
+  elseif ($selected_center == 'All') {
+    return $cities_typedate_tree;
+  }
+  else {
+    return array();
+  }
+}
+
+/**
+ * Render cities with command ajax.
+ */
+function _cities_command_callback(&$form, &$form_state) {
+  $commands = array();
+  // Render the select element.
+  $commands[] = ajax_command_replace('#city_div', drupal_render($form['date_information']['city']));
+  $commands[] = ajax_command_replace('#typedate_div', drupal_render($form['date_information']['type_date'] = array(
+    '#title'         => t('Tipo de Cita'),
+    '#type'          => 'select',
+    '#description'   => 'Selecciona un tipo de cita',
+    '#options'       => _get_typedates_dropdown_options('Ciudad'),
+    '#default_value' => 'Tipo de servicio',
+    '#prefix'        => '<div id="typedate_div">',
+    '#suffix'        => '</div>',
+  )));
+
+  $commands[] = ajax_command_replace('#center_service_div', drupal_render($form['date_information']['center_service'] = array(
+    '#title'         => t('Centro de Servicio'),
+    '#type'          => 'select',
+    '#description'   => 'Selecciona el centro de servicio',
+    '#options'       => _get_centerservice_dropdown_options('Tipo de servicio', 'Ciudad'),
+    '#default_value' => 'Centro de servicio',
+    '#prefix'        => '<div id="center_service_div">',
+    '#suffix'        => '<span id="address_center"></span></div>',
+
+  )));
+
+  return array('#type' => 'ajax', '#commands' => $commands);
+}
+
+/**
+ * Render center service with command ajax.
+ */
+function _type_command_callback(&$form, &$form_state) {
+  $commands = array();
+  // Render the select element.
+  $commands[] = ajax_command_replace('#center_service_div', drupal_render($form['date_information']['center_service']));
+
+  return array('#type' => 'ajax', '#commands' => $commands);
+}
+
+/**
+ * Callback _center_command_callback().
+ */
+function _center_command_callback(&$form, &$form_state) {
+  $commands = array();
+  // Render the select element.
+  $cst_name = $form_state['values']['center_service'];
+  $cst_array = _get_centerservice_dropdown_options_address($form_state['values']['city']);
+  $commands[] = ajax_command_replace('#typedate_div', drupal_render($form['date_information']['type_date']));
+  $commands[] = ajax_command_html('#address_center', $cst_array[$cst_name]);
+
+  return array('#type' => 'ajax', '#commands' => $commands);
+}
+
+function scheduling_appointments_views_api() {
+  return array(
+    'api'  => 3,
+    'path' => drupal_get_path('module', 'scheduling_appointments') . '/views',
+  );
+}
+
+function scheduling_appointments_change_state() {
+
+  if (isset($_GET['id']) && isset($_GET['e'])) {
+    extract($_GET);
+
+    $idSanitized = FALSE;
+    $eSanitized = FALSE;
+
+    if (is_int(intval($id))) {
+      $idSanitized = TRUE;
+    }
+
+    if (is_string(strval($e))) {
+      switch ($e) {
+        case 'Agendada':
+          $eSanitized = TRUE;
+          break;
+        case 'Revisado':
+          $eSanitized = TRUE;
+          break;
+        case 'No asistio':
+          $eSanitized = TRUE;
+          break;
+        case 'Vencida':
+          $eSanitized = TRUE;
+          break;
+        default:
+          $eSanitized = FALSE;
+          break;
+      }
+    }
+
+    if ($idSanitized && $eSanitized) {
+      db_update('scheduling_appointments')
+        ->fields(array('state' => $e))
+        ->condition('id_appointment', $id, '=')
+        ->execute();
+
+      echo "<script language=\"Javascript\">history.go(-1);</script>";
+    }
+  }
+}
+
+/**
+ * Update calendar.
+ */
+function _scheduling_appointments_update_calendar($center, &$form_state) {
+  // Dias no laborables.
+  $query = db_select('node', 'node')
+    ->fields('node', array('nid'));
+  $query->innerJoin('field_data_field_nonwork_dates', 'fd', 'fd.entity_id = node.nid');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.title', $center, '=');
+  $query->condition('node.status', '1', '=');
+  $query->distinct();
+  $query->addField('fd', 'field_nonwork_dates_multidates_field', 'dates');
+  $result = $query->execute();
+
+  $dates_nonworking = array();
+
+  while ($aux = $result->fetchAssoc()) {
+    if (isset($aux['nid'])) {
+      $dates_nonworking = explode(',', str_replace('/', '-', $aux['dates']));
+    }
+  }
+
+  //verificar si el servicio se presta de lunes a viernes
+
+  $weekdays = FALSE;
+  $query = db_select('node', 'node')
+    ->fields('node', array('nid'));
+  $query->innerJoin('field_data_field_service_types_mf', 'ft', 'ft.entity_id = node.nid');
+  $query->innerJoin('field_data_field_type_service', 'ftc', 'ftc.entity_id = ft.field_service_types_mf_value');
+  $query->innerJoin('field_data_field_motorcycles_for_day', 'mf', 'mf.entity_id = ftc.entity_id');
+  $query->innerJoin('taxonomy_term_data', 'ttd', 'ttd.tid = ftc.field_type_service_tid');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.title', $form_state['info'][1]['center_service'], '=');
+  $query->condition('ttd.name', $form_state['info'][1]['type_date'], '=');
+  $query->condition('node.status', '1', '=');
+  $query->addField('mf', 'field_motorcycles_for_day_value', 'motorcycle_number');
+  $result = $query->execute();
+  $mf = $result->fetchAssoc();
+
+  if (isset($mf['nid'])) {
+    $weekdays = TRUE;
+  }
+  else {
+    $weekdays = FALSE;
+  }
+
+  //verificar si el servicio se presta los sabados
+  $saturday = FALSE;
+  $query = db_select('node', 'node')
+    ->fields('node', array('nid'));
+  $query->innerJoin('field_data_field_service_types_s', 'ft', 'ft.entity_id = node.nid');
+  $query->innerJoin('field_data_field_type_service', 'ftc', 'ftc.entity_id = ft.field_service_types_s_value');
+  $query->innerJoin('field_data_field_motorcycles_for_day', 's', 's.entity_id = ftc.entity_id');
+  $query->innerJoin('taxonomy_term_data', 'ttd', 'ttd.tid = ftc.field_type_service_tid');
+  $query->condition('node.type', 'service_centers', '=');
+  $query->condition('node.title', $form_state['info'][1]['center_service'], '=');
+  $query->condition('ttd.name', $form_state['info'][1]['type_date'], '=');
+  $query->condition('node.status', '1', '=');
+  $query->addField('s', 'field_motorcycles_for_day_value', 'motorcycle_number');
+  $result = $query->execute();
+  $s = $result->fetchAssoc();
+
+  if (isset($s['nid'])) {
+    $saturday = TRUE;
+  }
+  else {
+    $saturday = FALSE;
+  }
+  $unable_days = array();
+  $day = date('d-m-Y');
+  $day_start = strtotime($day);
+  $day_end = strtotime('+180 day', $day_start);
+  //if the service type is avaible in the week
+  if ($weekdays == TRUE) {
+    for ($i = $day_start; $i <= $day_end; $i = strtotime('+1 day', $i)) {
+      $day_i = date('N', $i);
+      if ($day_i < 6) {
+        $query_dates = db_select('scheduling_appointments', 's')
+          ->fields('s', array('id_appointment'));
+        $query_dates->innerJoin('node', 'n', 'n.nid = s.id_center_services');
+        $query_dates->condition('n.title', $form_state['info'][1]['center_service'], '=');
+        $query_dates->innerJoin('taxonomy_term_data', 'ttd', 'ttd.tid = s.tid_type_services');
+        $query_dates->condition('ttd.name', $form_state['info'][1]['type_date'], '=');
+        $query_dates->condition('s.date', $i, '>=');
+        $query_dates->condition('s.state', 'Agendada', '=');
+        $query_dates->condition('s.date', $i + 86400, '<');
+        $query_dates->addField('n', 'title', 'center_service');
+        $result = $query_dates->execute();
+        $recordNumber = 0;
+        while ($aux = $result->fetchAssoc()) {
+          if (isset($aux['id_appointment'])) {
+            $recordNumber += 1;
+          }
+        }
+        $day_calendar = date('m-d-Y', $i);
+        if ($recordNumber > 0) {
+          if ($recordNumber >= $mf['motorcycle_number']) {
+            $unable_days[] = $day_calendar;
+          }
+        }
+      }
+      $recordNumber = 0;
+    }
+  }
+  //Si existe solo los sabados
+  if ($saturday == TRUE) {
+    for ($i = $day_start; $i <= $day_end; $i = strtotime('+1 day', $i)) {
+      $day_i = date('N', $i);
+      if ($day_i == 6) {
+        $query_dates = db_select('scheduling_appointments', 's')
+          ->fields('s', array('id_appointment'));
+        $query_dates->innerJoin('node', 'n', 'n.nid = s.id_center_services');
+        $query_dates->condition('n.title', $form_state['info'][1]['center_service'], '=');
+        $query_dates->innerJoin('taxonomy_term_data', 'ttd', 'ttd.tid = s.tid_type_services');
+        $query_dates->condition('ttd.name', $form_state['info'][1]['type_date'], '=');
+        $query_dates->condition('s.date', $i, '>=');
+        $query_dates->condition('s.state', 'Agendada', '=');
+        $query_dates->condition('s.date', $i + 86400, '<');
+        $query_dates->addField('n', 'title', 'center_service');
+        $result = $query_dates->execute();
+        $recordNumber = 0;
+        while ($aux = $result->fetchAssoc()) {
+          if (isset($aux['id_appointment'])) {
+            $recordNumber += 1;
+          }
+        }
+        $day_calendar = date('m-d-Y', $i);
+        if ($recordNumber > 0) {
+          if ($recordNumber >= $s['motorcycle_number']) {
+            $unable_days[] = $day_calendar;
+          }
+        }
+      }
+      $recordNumber = 0;
+    }
+  }
+
+  if ($saturday == FALSE) {
+    for ($i = $day_start; $i <= $day_end; $i = strtotime('+1 day', $i)) {
+      $day_i = date('N', $i);
+      if ($day_i == 6) {
+        $day_calendar = date('m-d-Y', $i);
+        $unable_days[] = $day_calendar;
+      }
+    }
+  }
+
+  if ($weekdays == FALSE) {
+    for ($i = $day_start; $i <= $day_end; $i = strtotime('+1 day', $i)) {
+      $day_i = date('N', $i);
+      if ($day_i < 6) {
+        $day_calendar = date('m-d-Y', $i);
+        $unable_days[] = $day_calendar;
+      }
+    }
+  }
+  // Disable sunday.
+  for ($i = $day_start; $i <= $day_end; $i = $i + 86400) {
+    $day_i = date('N', $i);
+    if ($day_i == 7) {
+      $day_calendar = date('m-d-Y', $i);
+      $unable_days[] = $day_calendar;
+    }
+  }
+
+  $unable_days_items = array_merge($unable_days, $dates_nonworking);
+  drupal_add_js(array('scheduling_appointments' => array('unable_days' => $unable_days_items)), 'setting');
+
+  return $unable_days_items;
+}
+
+function scheduling_appointments_schedule($ajax = TRUE, $center, $date) {
+
+  if (isset($_POST)) {
+    extract($_POST);
+  }
+  if ($ajax == FALSE) {
+    $cs = $center;
+    $dt = $date;
+  }
+
+  $day_schedule = array();
+  $day_schedule = get_schedule_grid($cs, $dt);
+  $time = strtotime($dt);
+  $timeint = (int) $time;
+  $day_week = date("N", $timeint);
+  $query_hours_take = db_select('scheduling_appointments', 's')
+    ->fields('s', array('id_appointment', 'date'));
+  $query_hours_take->innerJoin('node', 'n', 'n.nid = s.id_center_services');
+  $query_hours_take->condition('n.type', 'service_centers', '=');
+  $query_hours_take->condition('n.title', $cs, '=');
+  $query_hours_take->condition('s.date', $time, '>=');
+  $query_hours_take->condition('s.date', $time + 86400, '<');
+  $query_hours_take->condition('s.state', 'Agendada', '=');
+  $query_hours_take->distinct();
+  $query_hours_take->addField('s', 'date', 'date');
+  $result = $query_hours_take->execute();
+  $dates_bd = array();
+  while ($aux = $result->fetchAssoc()) {
+    $dates_bd[] = $aux['date'];
+  }
+  $count_range_dates = 0;
+  for ($i = 0; $i < count($day_schedule['hours']); $i++) {
+    $count_range_dates = 0;
+    for ($j = 0; $j < count($dates_bd); $j++) {
+      if ($day_schedule['hours'][$i] == date('H:i', $dates_bd[$j])) {
+        $count_range_dates++;
+        if ($count_range_dates >= $day_schedule['motorcycle_number']) {
+          unset($day_schedule['hours'][$i]);
+        }
+      }
+    }
+  }
+  if ($ajax == TRUE) {
+    return drupal_json_output($day_schedule['hours']);
+  }
+  else {
+    return $day_schedule['hours'];
+  }
+}
+
+function get_schedule_grid($service_center, $date) {
+  $timestamp = strtotime($date);
+  $timeint = (int) $timestamp;
+  $day_week = date("N", $timeint);
+
+  if ($day_week < 6) {
+    $query = db_select('node', 'node')
+      ->fields('node', array('nid'));
+    $query->innerJoin('field_data_field_motorcycle_15_minutes', 'ft', 'ft.entity_id = node.nid');
+    $query->innerJoin('field_data_field_morning_schedule_mf', 'ms', 'ms.entity_id = ft.entity_id');
+    $query->innerJoin('field_data_field_evening_schedule_mf', 'es', 'es.entity_id = ms.entity_id');
+    $query->condition('node.type', 'service_centers', '=');
+    $query->condition('node.title', $service_center, '=');
+    $query->condition('node.status', '1', '=');
+    $query->addField('ft', 'field_motorcycle_15_minutes_value', 'motorcycle_number');
+    $query->addField('ms', 'field_morning_schedule_mf_value', 'morning');
+    $query->addField('es', 'field_evening_schedule_mf_value', 'evening');
+    $result = $query->execute();
+
+    $mf = $result->fetchAssoc();
+    $hours = scheduling_appointments_time_ranges($mf);
+    return array(
+      'hours'             => $hours,
+      'morning'           => $mf['morning'],
+      'evening'           => $mf['evening'],
+      'motorcycle_number' => $mf['motorcycle_number'],
+    );
+  }
+
+  if ($day_week == 6) {
+    $query = db_select('node', 'node')
+      ->fields('node', array('nid'));
+    $query->innerJoin('field_data_field_motorcycle_15_minutes_s', 'ft', 'ft.entity_id = node.nid');
+    $query->innerJoin('field_data_field_morning_schedule_s', 'ms', 'ms.entity_id = ft.entity_id');
+    $query->innerJoin('field_data_field_evening_schedule_s', 'es', 'es.entity_id = ms.entity_id');
+    $query->condition('node.type', 'service_centers', '=');
+    $query->condition('node.title', $service_center, '=');
+    $query->condition('node.status', '1', '=');
+    $query->addField('ft', 'field_motorcycle_15_minutes_s_value', 'motorcycle_number');
+    $query->addField('ms', 'field_morning_schedule_s_value', 'morning');
+    $query->addField('es', 'field_evening_schedule_s_value', 'evening');
+    $result = $query->execute();
+    $s = $result->fetchAssoc();
+
+    $hours = scheduling_appointments_time_ranges($s);
+
+    return array(
+      'hours'             => $hours,
+      'morning'           => $s['morning'],
+      'evening'           => $s['evening'],
+      'motorcycle_number' => $s['motorcycle_number'],
+    );
+  }
+
+  return array();
+}
+
+function scheduling_appointments_time_ranges($mf) {
+
+  if (isset($mf['morning'])) {
+    $morning_range = explode('-', $mf['morning']);
+    $morning_start_date = strtotime($morning_range[0]);
+    $morning_end_date = strtotime($morning_range[1]);
+    $morning_hours = array();
+    for ($i = $morning_start_date; $i < $morning_end_date; $i += 900) {
+      $morning_hours[] = date('H:i', $i);
+    }
+  }
+
+  if (isset($mf['evening'])) {
+    $later_range = explode('-', $mf['evening']);
+    $later_start_date = strtotime($later_range[0]);
+    $later_end_date = strtotime($later_range[1]);
+    $later_hours = array();
+    for ($i = $later_start_date; $i < $later_end_date; $i += 900) {
+      $later_hours[] = date('H:i', $i);
+    }
+  }
+
+  $hours = array_merge($morning_hours, $later_hours);
+
+  return $hours;
+}
+
+function scheduling_appointments_mail($key, &$message, $params) {
+  extract($params);
+  global $base_root;
+  $logo = $base_root . '/sites/default/files/logo.png';
+  $message['headers']['Content-Type'] = 'text/html; charset=UTF-8;';
+
+  switch ($key) {
+    case 'confirmacion_cita':
+      $message['subject'] = "Reserva para $tipo_servicio en $centro_servicio";
+      $message['body'][] = "<img src=$logo alt='Akt motos' height='62' width='90'> <br> Tu reserva para $tipo_servicio ha sido exitosa. <br><br> <b> Datos de la reserva</b> <br><br> Código de la reserva: $codigo_reserva<br> Servicio solicitado: $tipo_servicio <br> Sede: $centro_servicio <br> Dirección Sede: $address_center <br> Fecha solicitada para la cita: $fecha <br> Hora solicitada para la cita: $hora <br><br> <b>Datos ingresados durante la reserva</b><br><br>Nombre completo: $nombres $apellidos <br> Placa: $placa <br> Email: $email <br> Tel contacto: $tel_contacto <br> Celular: $celular <br> Observaciones: $observaciones<br> <br> Si deseas cancelar esta reserva haz clic en <a href=$base_root/consulta_tu_cita>Consulta tu cita </a>
+          </br>Por favor no responder a este mensaje. Si tienes alguna inquietud por favor envíanos un correo a call.aktmotos@colcomercio.com.co";
+      break;
+
+    case 'cancelacion_cita':
+      $message['subject'] = "Cancelacion cita para $tipo_servicio en $centro_servicio";
+      $message['body'][] = "<img src=$logo alt='Akt motos' height='62' width='90'> <br> Tu reserva para $tipo_servicio ha sido cancelada exitosamente. <br><br> <b> Datos de la reserva</b> <br><br> Código de la reserva: $codigo_reserva<br> Servicio solicitado: $tipo_servicio <br> Sede: $centro_servicio <br> Dirección Sede: $address_center <br> Fecha solicitada para la cita: $fecha <br> Hora solicitada para la cita: $hora <br><br> <b>Datos ingresados durante la reserva</b><br><br> Nombre completo: $nombres $apellidos <br> Placa: $placa <br> Email: $email <br> Tel contacto: $tel_contacto <br> Celular: $celular <br> Observaciones: $observaciones<br> <br>
+          </br>Por favor no responder a este mensaje. Si tienes alguna inquietud por favor envíanos un correo a call.aktmotos@colcomercio.com.co";
+      break;
+
+    case 'confirmacion_cita_centro':
+      $message['subject'] = "Reserva para $tipo_servicio en $centro_servicio";
+      $message['body'][] = "<img src=$logo alt='Akt motos' height='62' width='90'> <br> Una reserva para $tipo_servicio ha sido exitosa. <br> <br><b> Datos de la reserva</b> <br><br> Código de la reserva: $codigo_reserva<br> Servicio solicitado: $tipo_servicio <br> Sede: $centro_servicio <br> Dirección Sede: $address_center<br>Fecha solicitada para la cita: $fecha <br> <br> <b>Datos ingresados durante la reserva</b><br><br> Nombre completo: $nombres $apellidos <br> Placa: $placa <br> Direccion cliente: $direccion <br> Email: $email <br> Tel contacto: $tel_contacto <br> Celular: $celular <br> Observaciones: $observaciones<br> <br> </br>Por favor no responder a este mensaje. Si tienes alguna inquietud por favor envíanos un correo a call.aktmotos@colcomercio.com.co";
+      break;
+
+    case 'cancelacion_cita_centro':
+      $message['subject'] = "Cancelacion cita para $tipo_servicio en $centro_servicio";
+      $message['body'][] = "<img src=$logo alt='Akt motos' height='62' width='90'> <br> La reserva para $tipo_servicio ha sido cancelada. <br><br> <b> Datos de la reserva</b> <br><br> Código de la reserva: $codigo_reserva<br> Servicio solicitado: $tipo_servicio <br> Sede: $centro_servicio <br> Dirección Sede: $address_center<br>Fecha solicitada para la cita: $fecha <br> <b>Datos ingresados durante la reserva</b><br><br> Nombre completo: $nombres $apellidos <br> Placa: $placa <br> Direccion cliente: $direccion <br> Email: $email <br> Tel contacto: $tel_contacto <br> Celular: $celular <br> Observaciones: $observaciones<br> <br></br>Por favor no responder a este mensaje. Si tienes alguna inquietud por favor envíanos un correo a call.aktmotos@colcomercio.com.co";
+      break;
+  }
+}
+
+/**
+ * Cancel form.
+ */
+function scheduling_appointments_cancel_form($form, &$form_state) {
+  $form['#prefix'] = '<div' . drupal_attributes(array('id' => 'confirmar')) . '>';
+  $form['#suffix'] = '</div>';
+  $step = isset($form_state['storage']['step_cancel']) ? $form_state['storage']['step_cancel'] : 1;
+  $form['step'] = array(
+    '#type'  => 'hidden',
+    '#value' => $step,
+  );
+  switch ($step) {
+    case 1:
+      $form_state['storage']['step_cancel'] = 1;
+      $form['contenedor_confirma_cita'] = array(
+        '#type'       => 'container',
+        '#attributes' => array('id' => array(drupal_html_class('dates_container'))),
+      );
+      $form['contenedor_confirma_cita']['chasis'] = array(
+        '#type'          => 'textfield',
+        '#title'         => 'Busca por número de reserva o chasis',
+        '#default_value' => isset($_GET['c']) ? $_GET['c'] : '',
+      );
+      $form['contenedor_confirma_cita']['submit'] = array(
+        '#type'  => 'submit',
+        '#value' => 'Consultar',
+        '#id'    => 'submit',
+        '#ajax'  => array(
+          'callback' => 'scheduling_appointments_cancel_callback',
+          'wrapper'  => 'confirmar',
+        ),
+      );
+      break;
+
+    case 2:
+      $query = db_select('scheduling_appointments', 's')
+        ->fields('s', array('reservation_code', 'plate', 'identification_owner', 'chasis', 'id_center_services', 'mileage', 'tid_type_services', 'tid_city', 'tid_department', 'date'));
+      $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+      $query->condition('chasis', $form_state['info_cancel'][1]['chasis'], '=');
+      $query->condition('state', 'Agendada', '=');
+      $query->addField('ac', 'field_address_center_value', 'address_center');
+      $dates = $query->execute();
+      $result = $dates->fetchAssoc();
+
+      if (!isset($result['chasis'])) {
+        $query = db_select('scheduling_appointments', 's')
+          ->fields('s', array('reservation_code', 'plate', 'chasis', 'identification_owner', 'id_center_services', 'mileage', 'tid_type_services', 'tid_city', 'tid_department', 'date'));
+        $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+        $query->condition('reservation_code', $form_state['info_cancel'][1]['chasis'], '=');
+        $query->condition('state', 'Agendada', '=');
+        $query->addField('ac', 'field_address_center_value', 'address_center');
+        $dates = $query->execute();
+        $result = $dates->fetchAssoc();
+      }
+      $form_state['info_cancel'][2] = $result;
+
+      if (isset($result['plate']) && isset($result['chasis'])) {
+        $query = db_select('motorcycle_owner', 'm')
+          ->fields('m', array('identification_owner', 'name_owner', 'phone_owner', 'last_name_owner', 'address_owner', 'date_born_owner', 'mobile_phone', 'email_owner'));
+        $query->condition('identification_owner', $result['identification_owner'], '=');
+        $dates2 = $query->execute();
+        $result2 = $dates2->fetchAssoc();
+        $term = taxonomy_term_load($result['tid_type_services']);
+        $tid_type_services = $term->name;
+        $term = taxonomy_term_load($result['tid_city']);
+        $tid_city = $term->name;
+        $term = taxonomy_term_load($result['tid_department']);
+        $tid_department = $term->name;
+        $node = node_load($result['id_center_services']);
+        $id_center_service = $node->title;
+        $form['contenedor_confirma_cita']['update'] = array(
+          '#type'       => 'container',
+          '#attributes' => array('class' => array(drupal_html_class('dates_container_update'))),
+        );
+        $form['contenedor_confirma_cita']['update']['date_info'] = array(
+          '#title'       => t('DATOS DE LA CITA'),
+          '#type'        => 'fieldset',
+          '#collapsible' => FALSE,
+          '#collapsed'   => FALSE,
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['reservation_code'] = array(
+          '#prefix' => '<div id="reservation_code">',
+          '#markup' => '<p class="label">Codigo de Reserva: </p>' . '<p class="dato">' . $result['reservation_code'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['chasis'] = array(
+          '#prefix' => '<div id="chasis">',
+          '#markup' => '<p class="label">Chasis: </p>' . '<p class="dato">' . $result['chasis'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['center'] = array(
+          '#prefix' => '<div id="centerservice">',
+          '#markup' => '<p class="label">Centro de Servicio: </p>' . '<p class="dato">' . $id_center_service . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['address_center'] = array(
+          '#prefix' => '<div id="address_center">',
+          '#markup' => '<p class="label">Dirección Centro de Servicio: </p>' . '<p class="dato">' . $result['address_center'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['date'] = array(
+          '#prefix' => '<div id="date">',
+          '#markup' => '<p class="label">Fecha - Hora: </p>' . '<p class="dato">' . date('d-m-Y H:i', $result['date']) . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['state'] = array(
+          '#prefix' => '<div id="state">',
+          '#markup' => '<p class="label" >Departamento: </p>' . '<p class="dato">' . $tid_department . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['city'] = array(
+          '#prefix' => '<div id="ciudad">',
+          '#markup' => '<p class="label">Ciudad: </p>' . '<p class="dato">' . $tid_city . '</p>',
+          '#suffix' => '</div>',
+        );
+
+        $form['contenedor_confirma_cita']['update']['date_info']['type_date'] = array(
+          '#prefix' => '<div id="type_date">',
+          '#markup' => '<p class="label">Tipo de servicio: </p>' . '<p class="dato">' . $tid_type_services . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['date_info']['kilometraje'] = array(
+          '#prefix' => '<div id="kilometraje">',
+          '#markup' => '<p class="label"> Kilometraje actual: </p>' . '<p class="dato">' . $result['mileage'] . '</p>',
+          '#suffix' => '</div>',
+        );
+
+        $form['contenedor_confirma_cita']['update']['basic_info'] = array(
+          '#title'       => t('DATOS PERSONALES'),
+          '#type'        => 'fieldset',
+          '#collapsible' => FALSE,
+          '#collapsed'   => FALSE,
+        );
+        $form['contenedor_confirma_cita']['update']['basic_info']['plate'] = array(
+          '#prefix' => '<div id="plate">',
+          '#markup' => '<p class="label"> Placa: </p>' . '<p class="dato">' . $result['plate'] . '</p>',
+          '#suffix' => '</div>',
+        );
+
+        $form['contenedor_confirma_cita']['update']['basic_info']['name'] = array(
+          '#prefix' => '<div id="names">',
+          '#markup' => '<p class="label">Nombres: </p>' . '<p class="dato">' . $result2['name_owner'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['basic_info']['lastname'] = array(
+          '#prefix' => '<div id="lastname">',
+          '#markup' => '<p class="label">Apellidos: </p>' . '<p class="dato">' . $result2['last_name_owner'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['basic_info']['identificaton'] = array(
+          '#prefix' => '<div id="identificaton">',
+          '#markup' => '<p class="label">Documento: </p>' . '<p class="dato">' . $result2['identification_owner'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['basic_info']['TelephoneNumber'] = array(
+          '#prefix' => '<div id="TelephoneNumber">',
+          '#markup' => '<p class="label">Telefono: </p>' . '<p class="dato">' . $result2['phone_owner'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['basic_info']['TelephoneNumber2'] = array(
+          '#prefix' => '<div id="TelephoneNumber2">',
+          '#markup' => '<p class="label">Celular </p>' . '<p class="dato">' . $result2['mobile_phone'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['update']['basic_info']['EMail'] = array(
+          '#prefix' => '<div id="EMail">',
+          '#markup' => '<p class="label">Correo Electonico </p>' . '<p class="dato">' . $result2['email_owner'] . '</p>',
+          '#suffix' => '</div>',
+        );
+        $form['contenedor_confirma_cita']['cancelar'] = array(
+          '#type'  => 'submit',
+          '#value' => 'Cancelar cita',
+          '#id'    => 'submit',
+          '#ajax'  => array(
+            'callback' => 'scheduling_appointments_cancel_callback',
+            'wrapper'  => 'confirmar',
+          ),
+        );
+      }
+      break;
+  }
+  $form['contenedor_confirma_cita']['atras'] = array(
+    '#type'  => 'link',
+    '#title' => 'Atrás',
+    '#href'  => 'landing_pide_tu_cita',
+    '#id'    => 'back',
+  );
+
+  return $form;
+}
+
+
+function scheduling_appointments_cancel_form_submit(&$form, &$form_state) {
+  $step = (isset($form_state['values']['step'])) ? $form_state['values']['step'] : $form_state['storage']['step_cancel'];
+
+
+  if ($step == 1) {
+    $form_state['info_cancel'][$step] = $form_state['values'];
+  }
+
+  if ($step == 2) {
+    _update_cancel_appointments($form, $form_state);
+    $form_state['storage']['step_cancel'] = 1;
+  }
+
+  if ($form_state['clicked_button']['#id'] == 'submit' && $step == 1) {
+    $form_state['storage']['step_cancel'] = ++$form_state['storage']['step_cancel'];
+
+
+  }
+
+  $form_state['rebuild'] = TRUE;
+
+}
+
+
+function scheduling_appointments_cancel_callback(&$form, &$form_state) {
+  return $form;
+}
+
+function scheduling_appointments_cancel_form_validate(&$form, &$form_state) {
+  $step = (isset($form_state['values']['step'])) ? $form_state['values']['step'] : $form_state['storage']['step_cancel'];
+
+
+  switch ($step) {
+    case 1:
+
+
+      $query = db_select('scheduling_appointments', 's')
+        ->fields('s', array('reservation_code', 'plate', 'identification_owner', 'chasis', 'id_center_services', 'mileage', 'tid_type_services', 'tid_city', 'tid_department', 'date'));
+      $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+      $query->condition('chasis', $form_state['values']['chasis'], '=');
+      $query->condition('state', 'Agendada', '=');
+      $query->addField('ac', 'field_address_center_value', 'address_center');
+      $dates = $query->execute();
+      $result = $dates->fetchAssoc();
+
+
+      if (!isset($result['chasis'])) {
+
+        $query = db_select('scheduling_appointments', 's')
+          ->fields('s', array('reservation_code', 'plate', 'chasis', 'identification_owner', 'id_center_services', 'mileage', 'tid_type_services', 'tid_city', 'tid_department', 'date'));
+        $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+        $query->condition('reservation_code', $form_state['values']['chasis'], '=');
+        $query->condition('state', 'Agendada', '=');
+        $query->addField('ac', 'field_address_center_value', 'address_center');
+        $dates = $query->execute();
+        $result = $dates->fetchAssoc();
+
+      }
+
+
+      if (!isset($result['chasis'])) {
+
+        form_set_error('chasis', 'No existe ninguna cita agendada con los datos suministrados');
+      }
+
+      break;
+
+    case 4:
+
+
+      break;
+  }
+
+}
+
+
+function _update_cancel_appointments(&$form, &$form_state) {
+  global $language;
+
+  $query = db_select('scheduling_appointments', 's')
+    ->fields('s', array('reservation_code', 'plate', 'chasis', 'identification_owner', 'id_center_services', 'mileage', 'tid_type_services', 'tid_city', 'tid_department', 'date'));
+  $query->innerJoin('field_data_field_address_center', 'ac', 'ac.entity_id = s.id_center_services');
+  $query->condition('reservation_code', $form_state['info_cancel'][2]['reservation_code'], '=');
+  $query->condition('state', 'Agendada', '=');
+  $query->addField('ac', 'field_address_center_value', 'address_center');
+  $dates = $query->execute();
+  $result = $dates->fetchAssoc();
+
+
+  db_update('scheduling_appointments')
+    ->fields(array('state' => 'Cancelada',))
+    ->condition('reservation_code', $form_state['info_cancel'][2]['reservation_code'], '=')
+    ->execute();
+
+
+  $query_email_center = db_select('node', 'n')
+    ->fields('n', array('nid', 'title'));
+  $query_email_center->innerJoin('field_data_field_email_admin', 'fde', 'fde.entity_id = n.nid');
+  $query_email_center->condition('n.nid', $result['id_center_services'], '=');
+  $query_email_center->condition('n.type', 'service_centers', '=');
+  $query_email_center->addField('fde', 'field_email_admin_email', 'email');
+  $result_email = $query_email_center->execute();
+  $email_center = $result_email->fetchAssoc();
+
+
+  $mail_admin = $email_center['email'];
+  $query = db_select('motorcycle_owner', 'm')
+    ->fields('m', array('identification_owner', 'name_owner', 'phone_owner', 'last_name_owner', 'address_owner', 'date_born_owner', 'mobile_phone', 'email_owner'));
+  $query->condition('identification_owner', $result['identification_owner'], '=');
+  $dates2 = $query->execute();
+  $result2 = $dates2->fetchAssoc();
+
+  $term = taxonomy_term_load($result['tid_type_services']);
+  $tid_type_services = $term->name;
+
+  $term = taxonomy_term_load($result['tid_city']);
+  $tid_city = $term->name;
+
+  $term = taxonomy_term_load($result['tid_department']);
+  $tid_department = $term->name;
+
+  $node = node_load($result['id_center_services']);
+  $id_center_service = $node->title;
+
+
+  $params = array(
+    'codigo_reserva'  => $result['reservation_code'],
+    'centro_servicio' => $email_center['title'],
+    'fecha'           => $result['date'],
+    'departamento'    => $tid_department,
+    'ciudad'          => $tid_city,
+    'tipo_servicio'   => $tid_type_services,
+    'placa'           => $result['plate'],
+    'nombres'         => $result2['name_owner'],
+    'apellidos'       => $result2['last_name_owner'],
+    'direccion'       => $result2['adress_owner'],
+    'email'           => $result2['email_owner'],
+    'tel_contacto'    => $result2['telephone_owner'],
+    'celular'         => $result2['mobile_phone'],
+    'observaciones'   => $result['comments'],
+    'address_center'  => $result['address_center'],
+  );
+
+  if (isset($mail_admin)) {
+    drupal_mail('scheduling_appointments', 'cancelacion_cita_centro', $mail_admin, $language, $params);
+  }
+  drupal_set_message('Cita cancelada exitosamente');
+
+  drupal_mail('scheduling_appointments', 'cancelacion_cita', trim($result2['email_owner']), $language, $params);
+
+
+}
+
+function ajax_form_multistep_back_submit($form, &$form_state) {
+  $form_state['storage']['step']--;
+  $form_state['rebuild'] = TRUE;
+}
+
+function ajax_form_multistep_back_step_1_submit($form, &$form_state) {
+  $form_state['storage']['step'] = 1;
+  $form_state['rebuild'] = TRUE;
+}
+
+function scheduling_appointments_user_view($account, $view_mode, $langcode) {
+  /*global $user;
+
+  if(in_array('administrador centro de servicios', array_values($user->roles)) || in_array('administrador pide tu cita', array_values($user->roles)) ){
+     $account['admin_center'] = array();
+      $account->content['admin_center'] = array(
+          '#type' => 'user_profile_item',
+          //'#title' => t('Administration Center Services'),
+          '#markup' => l(t('Administration Center Services'), "administracion_centro_de_servicios", array('attributes' => array('title' => t("Administration Center Services."), array('!username' => format_username($account))))),
+            '#attributes' => array('class' => array('admin_center')),
+       );
+
+
+  }
+
+   $account->landing = array();
+
+   $account->content['landing'] = array(
+
+          '#type' => 'user_profile_item',
+          //'#title' => 'Consultar o pedir cita',
+          '#markup' => l('Concultar o pedir cita', "landing_pide_tu_cita", array('attributes' => array('title' => t("Concultar o pedir cita."), array('!username' => format_username($account))))),
+            '#attributes' => array('class' => array('admin_center')),
+       );
+
+    ;*/
+
+}
+
+/**
+ * Get unique id.
+ */
+function unique_id($l = 4) {
+  return substr(md5(uniqid(mt_rand(), TRUE)), 0, $l);
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for views_exposed_form().
+ */
+function scheduling_appointments_form_views_exposed_form_alter(&$form, &$form_state, $form_id) {
+  $c_path = current_path();
+  if (drupal_match_path($c_path, 'reporte-centros-de-servicios2') && isset($form['id_center_services'])) {
+    $form['id_center_services']['#default_value'] = 'All';
+    $form['#validate'][] = '_scheduling_appointments_report_validate';
+  }
+}
+
+/**
+ * Validate.
+ */
+function _scheduling_appointments_report_validate($form, &$form_state) {
+  if (!$form_state['values']['id_center_services'] || empty($form_state['values']['id_center_services'])) {
+    $_GET['id_center_services'] = 'All';
+  }
+}
+
+/**
+ * Implements hook_potx_file_location_info().
+ */
+function scheduling_appointments_potx_file_location_info() {
+  return array(
+    'scheduling_appointments' => array(
+      'path' => drupal_get_path('module', 'scheduling_appointments') . '/potx',
+    ),
+  );
+}
+
+/**
+ * Actions form.
+ */
+function _scheduling_appointments_actions_form($form, &$form_state, $id_scheduling, $state = NULL) {
+  $form['#prefix'] = '<div id="scheduling-appointments-actions-' . $id_scheduling . '">';
+  $form['#suffix'] = '</div>';
+  $form['#attached']['js'] = array(ctools_attach_js('auto-submit'));
+  $form['id'] = array(
+    '#type'  => 'hidden',
+    '#value' => $id_scheduling,
+  );
+  $opts = array(
+    'Agendada'   => 'Agendada',
+    'Revisado'   => 'Revisado',
+    'No asistio' => 'No asistio',
+    'Vencida'    => 'Vencida',
+  );
+  $form['state'] = array(
+    '#title'         => t('State'),
+    '#type'          => 'select',
+    '#options'       => $opts,
+    '#title_display' => 'invisible',
+    '#default_value' => isset($opts[$state]) ? $opts[$state] : '',
+  );
+  $form['submit'] = array(
+    '#type'  => 'submit',
+    '#value' => t('Change'),
+    '#ajax'  => array(
+      'callback' => ' _scheduling_appointments_actions_ajax',
+      'wrapper'  => 'scheduling-appointments-actions-' . $id_scheduling,
+    ),
+  );
+
+  return $form;
+}
+
+/**
+ * Ajax form callback.
+ */
+function _scheduling_appointments_actions_ajax($form, &$form_state) {
+  return $form;
+}
+
+/**
+ * Actions form.
+ */
+function _scheduling_appointments_actions_form_submit($form, &$form_state) {
+  db_update('scheduling_appointments')
+    ->fields(array('state' => $form_state['values']['state']))
+    ->condition('id_appointment', $form['id']['#value'], '=')
+    ->execute();
+}
+
+/**
+ * Implements hook_cron_queue_info().
+ */
+function scheduling_appointments_cron_queue_info() {
+  $queues['scheduling_appointments_cr'] = array(
+    'worker callback' => '_scheduling_appointments_expired',
+    'time'            => 290,
+  );
+
+  return $queues;
+}
+
+/**
+ * Implements hook_cron().
+ */
+function scheduling_appointments_cron() {
+  $item = date('Y-m-d');
+  // Put everything in a queue for processing.
+  $queue = DrupalQueue::get('scheduling_appointments_cr');
+  $queue->createQueue();
+  $queue->createItem($item);
+}
+
+/**
+ * Worker Callback for the runner cron queue.
+ */
+function _scheduling_appointments_expired($item) {
+  $today = strtotime($item);
+  $today = $today - 86400;
+  db_update('scheduling_appointments')
+    ->fields(array(
+      'state' => 'Vencida',
+    ))
+    ->condition('date', $today, '<=')
+    ->condition('state', 'Agendada', '=')
+    ->execute();
+}

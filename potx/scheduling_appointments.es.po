@@ -1,0 +1,369 @@
+# $Id$
+#
+# Spanish translation of Drupal (general)
+# Copyright YEAR NAME <EMAIL@ADDRESS>
+# Generated from files:
+#  scheduling_appointments.module: n/a
+#  scheduling_appointments.install: n/a
+#  scheduling_appointments.info: n/a
+#  views/scheduling_appointments.views.inc: n/a
+#  views/handlers/views_handler_filter_name_user.inc: n/a
+#  views/handlers/views_scheduling_appoinments_handler_titles_select.inc: n/a
+#  views/handlers/views_scheduling_appointments_dates.inc: n/a
+#  views/handlers/views_scheduling_appointments_hour.inc: n/a
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"POT-Creation-Date: 2015-06-02 19:20+0000\n"
+"PO-Revision-Date: 2015-06-02 19:20+0000\n"
+"Last-Translator: NAME <EMAIL@ADDRESS>\n"
+"Language-Team: Spanish <EMAIL@ADDRESS>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n!=1);\n"
+
+#: scheduling_appointments.module:76
+msgid "Web service secutiry key"
+msgstr "Servicio web llave de seguridad"
+
+#: scheduling_appointments.module:83
+msgid "Save"
+msgstr "Guardar"
+
+#: scheduling_appointments.module:94
+msgid "Changes saved"
+msgstr "Cambios guardados"
+
+#: scheduling_appointments.module:480
+msgid "1. APPOINTMENT DATA"
+msgstr "1. DATOS DE LA CITA"
+
+#: scheduling_appointments.module:501
+msgid "Ciudad"
+msgstr ""
+
+#: scheduling_appointments.module:503
+msgid "Selecciona una ciudad"
+msgstr ""
+
+#: scheduling_appointments.module:518;1887
+msgid "Centro de Servicio"
+msgstr ""
+
+#: scheduling_appointments.module:520
+msgid "Selecciona el centro de servicio"
+msgstr ""
+
+#: scheduling_appointments.module:535;1877
+msgid "Tipo de Cita"
+msgstr ""
+
+#: scheduling_appointments.module:537
+msgid "Selecciona un tipo de cita"
+msgstr ""
+
+#: scheduling_appointments.module:549
+msgid "Escribe el kilometraje actual"
+msgstr ""
+
+#: scheduling_appointments.module:554
+msgid "2. COMENTARIOS"
+msgstr "2. COMENTARIOS"
+
+#: scheduling_appointments.module:561
+msgid "Cometarios"
+msgstr ""
+
+#: scheduling_appointments.module:572
+msgid "See Calendar"
+msgstr "Ver Calendario"
+
+#: scheduling_appointments.module:608
+msgid "3. SELECCIONA FECHA Y HORA"
+msgstr ""
+
+#: scheduling_appointments.module:654
+msgid "Fecha de la Cita"
+msgstr ""
+
+#: scheduling_appointments.module:656
+msgid "Selecciona la fecha de la cita"
+msgstr ""
+
+#: scheduling_appointments.module:705
+msgid "Hora de la Cita"
+msgstr ""
+
+#: scheduling_appointments.module:707
+msgid "Selecciona la hora de la cita"
+msgstr ""
+
+#: scheduling_appointments.module:721;778;1023;1198
+msgid "Back"
+msgstr "Atrás"
+
+#: scheduling_appointments.module:736;793;1038
+msgid "Next"
+msgstr "Siguiente"
+
+#: scheduling_appointments.module:755;883
+msgid "4. ACTUALIZA TUS DATOS"
+msgstr ""
+
+#: scheduling_appointments.module:769;898
+msgid "Chasis"
+msgstr "Chasis"
+
+#: scheduling_appointments.module:891
+msgid "Placa"
+msgstr ""
+
+#: scheduling_appointments.module:908
+msgid "Names"
+msgstr "Nombres"
+
+#: scheduling_appointments.module:916
+msgid "Document"
+msgstr "Documento"
+
+#: scheduling_appointments.module:923
+msgid "Last names"
+msgstr "Apellidos"
+
+#: scheduling_appointments.module:931
+msgid "Gender"
+msgstr "Género"
+
+#: scheduling_appointments.module:932
+msgid "Male"
+msgstr "Masculino"
+
+#: scheduling_appointments.module:932
+msgid "Female"
+msgstr "Femenino"
+
+#: scheduling_appointments.module:961
+msgid "City"
+msgstr "Ciudad"
+
+#: scheduling_appointments.module:969
+msgid "Phone"
+msgstr "Teléfono"
+
+#: scheduling_appointments.module:977
+msgid "Address"
+msgstr "Dirección"
+
+#: scheduling_appointments.module:990
+msgid "Birthday"
+msgstr "Fecha de Nacimiento"
+
+#: scheduling_appointments.module:1000
+msgid "Cell phone"
+msgstr "Celular"
+
+#: scheduling_appointments.module:1008
+msgid "Email"
+msgstr "Correo electrónico"
+
+#: scheduling_appointments.module:1016
+msgid "Authorize the use of my data on the following <a href=\"@link\" target=\"_blank\">terms and conditions</a>"
+msgstr ""
+"Autorizo el uso de mis datos en los siguientes <a href=\"@link\" "
+"target=\"_blank\">términos y condiciones</a>"
+
+#: scheduling_appointments.module:1052
+msgid "5. CONFIRMACIÓN"
+msgstr ""
+
+#: scheduling_appointments.module:1059;2454
+msgid "DATOS DE LA CITA"
+msgstr ""
+
+#: scheduling_appointments.module:1125;2514
+msgid "DATOS PERSONALES"
+msgstr ""
+
+#: scheduling_appointments.module:1284
+msgid "ACCEPT"
+msgstr "ACEPTAR"
+
+#: scheduling_appointments.module:1317
+msgid "Kilometraje should be numeric"
+msgstr ""
+
+#: scheduling_appointments.module:1321
+msgid "Comments should be maximum of 250 characters"
+msgstr "Los comentarios deben tener máximo 250 caracteres"
+
+#: scheduling_appointments.module:1430
+msgid "Invalid document"
+msgstr "Documento invalido"
+
+#: scheduling_appointments.module:1434;1438
+msgid "Invalid number phone"
+msgstr "Número de teléfono invalido"
+
+#: scheduling_appointments.module:1442
+msgid "Invalid email address"
+msgstr "Correo electrónico invalido"
+
+#: scheduling_appointments.module:1492
+msgid "Thanks for update your information"
+msgstr "Gracias por actualizar tus datos"
+
+#: scheduling_appointments.module:1495
+msgid "The system was not able to update your information. Please try again later."
+msgstr "El sistema no pudo actualizar su información. Por favor intente otra vez."
+
+#: scheduling_appointments.module:26
+msgid "PIDE TU CITA"
+msgstr ""
+
+#: scheduling_appointments.module:45
+msgid "CONSULTA TU CITA"
+msgstr ""
+
+#: scheduling_appointments.module:53
+msgid "Service"
+msgstr "Servicio"
+
+#: scheduling_appointments.module:61
+msgid "Configuracion pide tu cita"
+msgstr ""
+
+#: scheduling_appointments.install:19
+msgid "Data owner motorcycle"
+msgstr "Datos del propietario de la motocicleta"
+
+#: scheduling_appointments.install:22
+msgid "The primary identifier for the owner of the motorcycle"
+msgstr "Identificador primario para el dueño de la motocicleta"
+
+#: scheduling_appointments.install:29
+msgid "Name owner"
+msgstr "Nombre de dueño"
+
+#: scheduling_appointments.install:36
+msgid "Last name owner"
+msgstr "Apellido del dueño"
+
+#: scheduling_appointments.install:43
+msgid "Address owner"
+msgstr "Dirección del dueño"
+
+#: scheduling_appointments.install:50
+msgid "Date born owner"
+msgstr "Fecha de nacimiento del dueño"
+
+#: scheduling_appointments.install:56;63
+msgid "Phone owner"
+msgstr "Telefóno del dueño"
+
+#: scheduling_appointments.install:70
+msgid "Mobile phone owner"
+msgstr "Celular del dueño"
+
+#: scheduling_appointments.install:77
+msgid "Email owner"
+msgstr "Correo electrónico del dueño"
+
+#: scheduling_appointments.install:95 scheduling_appointments.info:0
+msgid "Scheduling of appointments - AKT"
+msgstr "Programación de citas -  AKT"
+
+#: scheduling_appointments.install:98
+msgid "The primary identifier for a appointment."
+msgstr "Identificador primario para una cita"
+
+#: scheduling_appointments.install:104
+msgid "user to schedule the appointment"
+msgstr "usuario que programa la cita"
+
+#: scheduling_appointments.install:111
+msgid "Center services department"
+msgstr "Departamento de centro de servicios"
+
+#: scheduling_appointments.install:116
+msgid "Center services city"
+msgstr "Ciudad de centro de servicios"
+
+#: scheduling_appointments.install:121
+msgid "Tid type appointment"
+msgstr "Tid de tipo de cita"
+
+#: scheduling_appointments.install:126
+msgid "Id Center Services"
+msgstr "Identidicación de centro de servicios"
+
+#: scheduling_appointments.install:131
+msgid "Reservation Code"
+msgstr "Código de la reservación"
+
+#: scheduling_appointments.install:137
+msgid "Date appointment"
+msgstr "Fecha de la cita"
+
+#: scheduling_appointments.install:143
+msgid "Center services"
+msgstr "Centro de servicios"
+
+#: scheduling_appointments.install:150
+msgid "Plate motorcycle"
+msgstr "PLaca de la motocicleta"
+
+#: scheduling_appointments.install:157
+msgid "Mileage motorcycle"
+msgstr "Kilometraje de la motocicleta"
+
+#: scheduling_appointments.install:164
+msgid "Owner identification"
+msgstr "Identificación del dueño"
+
+#: scheduling_appointments.install:171
+msgid "state of the appointment"
+msgstr "estado de la cita"
+
+#: scheduling_appointments.install:178
+msgid "comments of the appointment"
+msgstr "comentarios de la cita"
+
+#: scheduling_appointments.install:185
+msgid "Calendar type"
+msgstr "Tipo de calendario"
+
+#: scheduling_appointments.info:0
+msgid "Allows you to schedule appointments"
+msgstr "Permite programar citas"
+
+#: scheduling_appointments.info:0
+msgid "AKT"
+msgstr "AKT"
+
+#: views/scheduling_appointments.views.inc:287;288
+msgid "Site"
+msgstr "Sitio"
+
+#: views/scheduling_appointments.views.inc:299
+msgid "Date created"
+msgstr "Fecha de creación"
+
+#: views/handlers/views_handler_filter_name_user.inc:101 views/handlers/views_scheduling_appoinments_handler_titles_select.inc:83
+msgid "exposed"
+msgstr "expuesto"
+
+#: views/handlers/views_scheduling_appointments_dates.inc:22;44
+msgid "Date between"
+msgstr "Fecha entre"
+
+#: views/handlers/views_scheduling_appointments_dates.inc:27;50
+msgid "And"
+msgstr "Y"
+
+#: views/handlers/views_scheduling_appointments_hour.inc:17;28
+msgid "Hour"
+msgstr "Hora"
+

@@ -1,0 +1,348 @@
+<?php
+
+function scheduling_appointments_enable() {
+
+  $current = variable_get('mail_system', array('default-system' => 'DefaultMailSystem'));
+  $addition = array('scheduling_appointments' => 'scheduling_appointmentsMailSystem');
+  variable_set('mail_system', array_merge($current, $addition));
+
+}
+
+function scheduling_appointments_disable() {
+  $mail_system = variable_get('mail_system', array('default-system' => 'DefaultMailSystem'));
+
+  unset($mail_system['scheduling_appointments']);
+  variable_set('mail_system', $mail_system);
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+function scheduling_appointments_schema() {
+  $schema = array();
+  $schema['motorcycle_owner'] = array(
+    'description' => t('Data owner motorcycle'),
+    'fields'      => array(
+      'identification_owner' => array(
+        'description' => t('The primary identifier for the owner of the motorcycle'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'name_owner' => array(
+        'description' => t('Name owner'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'last_name_owner' => array(
+        'description' => t('Last name owner'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'address_owner' => array(
+        'description' => t('Address owner'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'date_born_owner' => array(
+        'description' => t('Date born owner'),
+        'mysql_type'  => 'datetime',
+        'not null'    => TRUE,
+      ),
+
+      'phone_owner' => array(
+        'description' => t('Phone owner'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'phone_owner' => array(
+        'description' => t('Phone owner'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'mobile_phone' => array(
+        'description' => t('Mobile phone owner'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'email_owner' => array(
+        'description' => t('Email owner'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'site' => array(
+        'description' => 'Site when data was saved',
+        'type'        => 'varchar',
+        'length'      => 10,
+        'not null'    => TRUE,
+        'default'     => 'akt',
+      ),
+    ),
+    'primary key' => array('identification_owner'),
+  );
+
+  $schema['scheduling_appointments'] = array(
+    'description' => t('Scheduling of appointments - AKT'),
+    'fields'      => array(
+      'id_appointment' => array(
+        'description' => t('The primary identifier for a appointment.'),
+        'type'        => 'serial',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ),
+      'uid'            => array(
+        'description' => t('user to schedule the appointment'),
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ),
+
+
+      'tid_department'     => array(
+        'description' => t('Center services department'),
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ),
+      'tid_city'           => array(
+        'description' => t('Center services city'),
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ),
+      'tid_type_services'  => array(
+        'description' => t('Tid type appointment'),
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ),
+      'id_center_services' => array(
+        'description' => t('Id Center Services'),
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ),
+      'reservation_code'   => array(
+        'description' => t('Reservation Code'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+      'date'               => array(
+        'description' => t('Date appointment'),
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ),
+
+      'chasis' => array(
+        'description' => t('Center services'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'plate' => array(
+        'description' => t('Plate motorcycle'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'mileage' => array(
+        'description' => t('Mileage motorcycle'),
+        'type'        => 'varchar',
+        'length'      => 100,
+        'not null'    => TRUE,
+      ),
+
+      'identification_owner' => array(
+        'description' => t('Owner identification'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'state' => array(
+        'description' => t('state of the appointment'),
+        'type'        => 'varchar',
+        'length'      => 100,
+        'not null'    => TRUE,
+      ),
+
+      'comments' => array(
+        'description' => t('comments of the appointment'),
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+      ),
+
+      'calendar_type' => array(
+        'description' => t('Calendar type'),
+        'type'        => 'int',
+        'not null'    => TRUE,
+      ),
+
+      'site' => array(
+        'description' => 'Site when data was saved',
+        'type'        => 'varchar',
+        'length'      => 10,
+        'not null'    => TRUE,
+        'default'     => 'akt',
+      ),
+
+      'created' => array(
+        'description' => 'The Unix timestamp when the scheduling was created.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+        'default'     => 0,
+      ),
+    ),
+
+    'indexes' => array(
+      'date'             => array('date'),
+      'reservation_code' => array('reservation_code'),
+      'state'            => array('state'),
+    ),
+
+    'foreign keys' => array(
+      'appointment_users'      => array(
+        'table'   => 'users',
+        'columns' => array('uid' => 'uid'),
+      ),
+      'appointment_owner'      => array(
+        'table'   => 'motorcycle_owner',
+        'columns' => array('identification_owner' => 'identification_owner'),
+      ),
+      'appointment_department' => array(
+        'table'   => 'taxonomy_term_data',
+        'columns' => array('tid_department' => 'tid'),
+      ),
+      'appointment_city'       => array(
+        'table'   => 'taxonomy_term_data',
+        'columns' => array('tid_city' => 'tid'),
+      ),
+
+      'appointment_services' => array(
+        'table'   => 'taxonomy_term_data',
+        'columns' => array('tid_type_services' => 'tid'),
+      ),
+
+      'appointment_center' => array(
+        'table'   => 'node',
+        'columns' => array('id_center_services' => 'nid'),
+      ),
+
+    ),
+
+    'primary key' => array('id_appointment'),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implements hook_install().
+ */
+function scheduling_appointments_install() {
+  // Make real foreign keys.
+
+  db_query('
+    ALTER TABLE {scheduling_appointments}
+    ADD CONSTRAINT {appointment_owner}
+    FOREIGN KEY (identification_owner) REFERENCES {motorcycle_owner} (identification_owner)
+  ');
+
+  /*db_query('
+    ALTER TABLE {scheduling_appointments}
+    ADD CONSTRAINT {users}
+    FOREIGN KEY (uid) REFERENCES {users} (uid)
+  ');
+
+  db_query('
+    ALTER TABLE {scheduling_appointments}
+    ADD CONSTRAINT {appointment_department}
+    FOREIGN KEY (tid_department) REFERENCES {taxonomy_term_data} (tid)
+  ');
+
+  db_query('
+    ALTER TABLE {scheduling_appointments}
+    ADD CONSTRAINT {appointment_city}
+    FOREIGN KEY (tid_city) REFERENCES {taxonomy_term_data} (tid)
+  ');
+
+  db_query('
+    ALTER TABLE {scheduling_appointments}
+    ADD CONSTRAINT {appointment_services}
+    FOREIGN KEY (tid_type_services) REFERENCES {taxonomy_term_data} (tid)
+  ');
+
+  db_query('
+    ALTER TABLE {scheduling_appointments}
+    ADD CONSTRAINT {appointment_center}
+    FOREIGN KEY (id_center_services) REFERENCES {node} (nid)
+  ');*/
+
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+
+function scheduling_appointments_uninstall() {
+  // Make real foreign keys.
+  /*db_query('
+     ALTER TABLE {scheduling_appointments}
+     DROP CONSTRAINT IF EXISTS {motorcycle_owner}
+   ');
+   */
+}
+
+/**
+ * Implements hook_update_N().
+ */
+function scheduling_appointments_update_7001(&$sandbox) {
+  db_add_field('motorcycle_owner', 'site', array(
+    'description' => 'Site when data was saved',
+    'type'        => 'varchar',
+    'length'      => 10,
+    'not null'    => TRUE,
+    'default'     => 'akt',
+  ));
+
+  db_add_field('scheduling_appointments', 'site', array(
+    'description' => 'Site when data was saved',
+    'type'        => 'varchar',
+    'length'      => 10,
+    'not null'    => TRUE,
+    'default'     => 'akt',
+  ));
+}
+
+/**
+ * Implements hook_update_N().
+ */
+function scheduling_appointments_update_7002(&$sandbox) {
+  db_add_field('scheduling_appointments', 'created', array(
+    'description' => 'The Unix timestamp when the scheduling was created.',
+    'type'        => 'int',
+    'not null'    => TRUE,
+    'default'     => 0,
+  ));
+}
+
+/**
+ * Implements hook_update_N().
+ */
+function scheduling_appointments_update_7003(&$sandbox) {
+  db_add_index('scheduling_appointments', 'state', array('state'));
+}

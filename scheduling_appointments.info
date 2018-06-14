@@ -1,0 +1,18 @@
+name = Scheduling of appointments - AKT
+description = Allows you to schedule appointments
+dependencies[]=field_ui
+dependencies[] = 'akt_ws'
+dependencies[] = 'user_database'
+
+package = AKT
+version = "7.x-1.1"
+core = 7.x
+
+files[] = views/handlers/views_scheduling_appoinments_handler_titles_select.inc
+files[] = views/handlers/views_handler_filter_name_user.inc
+files[] = views/handlers/views_scheduling_appointments_dates.inc
+files[] = views/handlers/views_scheduling_appoinments_hour.inc
+files[] = views/handlers/views_scheduling_appoinments_actions.inc
+
+; Libraries
+scripts[] = js/scheduling_appointments.js
